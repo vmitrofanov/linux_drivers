@@ -1,0 +1,5 @@
+*.o
+*.elf
+*.dis
+*.list
+/build
