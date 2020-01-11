@@ -1,4 +1,7 @@
-obj-m += bb_eth.o
+obj-m += eth.o
+obj-m += davinci_mdio.o
+
+eth-objs := bb_eth.o bb_drv.o
 
 ARCH := arm
 CROSS_COMPILE := arm-linux-gnueabi-

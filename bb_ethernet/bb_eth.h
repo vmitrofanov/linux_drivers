@@ -1,7 +1,14 @@
 #ifndef _BB_ETH_H
 #define _BB_ETH_H
 
-#define DT_MAC_SIZE		32
+#define DEBUG
+#ifdef DEBUG
+#define DBG(...)	pr_err(__VA_ARGS__)
+#else
+#define DBG(...)	while(0)
+#endif
+
+#define DT_MAC_SIZE		6
 #define BB_GEMAC_CLK	"fck"
 
 struct gemac_private
@@ -10,22 +17,21 @@ struct gemac_private
 	struct net_device *ndev;
 	struct platform_device *pdev;
 
-#if 1
 	/* DT resources */
-	struct resource *dt_ss;
-	struct resource *dt_ws;
-	struct resource *dt_mdio;
-	const char *dt_mac;
-	int dt_irq;
+	struct resource *dt_gemac_registers;
+	struct device_node *dt_phy_node;
 	struct clk *dt_clk;
-#endif
+	const char *dt_mac;
+	int dt_irq_rx;
+	int dt_irq_tx;
+	int dt_phy_id;
 
 	/* Hardware resources */
-	void __iomem *ss;		/* Switch Subsystem */
-	void __iomem *ws;		/* RGMII/GMII Subsystem */
-	void __iomem *mdio;		/* MDIO controller */
+	void __iomem *gemac_regs;
 
 	/* Software device resources */
+	struct napi_struct napi_rx;
+	struct napi_struct napi_tx;
 };
 
 #endif /* _BB_ETH_H */

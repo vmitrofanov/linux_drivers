@@ -9,14 +9,12 @@
 #include <linux/clk.h>
 
 #include "bb_eth.h"
+#include "bb_drv.h"
 
-#define DEBUG
-#ifdef DEBUG
-#define DBG(...)	pr_err(__VA_ARGS__)
-#else
-#define DBG(...)	while(0)
-#endif
-
+/**
+ * UP interface
+ * @param gemac associated net-device
+ */
 static int bb_gemac_open(struct net_device *gemac)
 {
 	DBG("-->%s\n", __FUNCTION__);
@@ -25,6 +23,10 @@ static int bb_gemac_open(struct net_device *gemac)
 	return 0;
 }
 
+/**
+ * DOWN interface
+ * @param gemac associated net-device
+ */
 static int bb_gemac_stop(struct net_device *gemac)
 {
 	DBG("-->%s\n", __FUNCTION__);
@@ -33,6 +35,11 @@ static int bb_gemac_stop(struct net_device *gemac)
 	return 0;
 }
 
+/**
+ * Start transferring net-data gotten from the stack
+ * @param sk net-data
+ * @gemac gemac associated net-device
+ */
 static netdev_tx_t bb_gemac_start_xmit(struct sk_buff *sk, struct net_device *gemac)
 {
 	DBG("-->%s\n", __FUNCTION__);
@@ -41,72 +48,78 @@ static netdev_tx_t bb_gemac_start_xmit(struct sk_buff *sk, struct net_device *ge
 	return NETDEV_TX_OK;
 }
 
-
+/**
+ * Acquire resources from DT
+ * @param pdata storage for resources
+ */
 static int bb_gemac_get_resources(struct gemac_private *pdata)
 {
 	struct platform_device *pdev = pdata->pdev;
-	struct device_node *child_node;
 
 	DBG("-->%s\n", __FUNCTION__);
 
 	if (!pdev)
 		return -1;
 
-	/* CPSW_SS. Ethernet Switch Subsystem */
-	pdata->dt_ss = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!pdata->dt_ss)
+	/* Get all GEMAC register range */
+	pdata->dt_gemac_registers = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!pdata->dt_gemac_registers)
 		return -2;
-
-	/* CPSW_WR. Ethernet Subsystem for RGMII/GMII interface */
-	pdata->dt_ws = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	if (!pdata->dt_ws)
-		return -3;
 
 	/* MAC address. It is possible if there is no default MAC in DT */
 	pdata->dt_mac = of_get_mac_address(pdev->dev.of_node);
 
-	/* Interrupt */
-	pdata->dt_irq = platform_get_irq(pdev, 0);
-	if (pdata->dt_irq < 0)
-			return -5;
+	/* Interrupts. 0-rx_thresh, 1-rx, 2-tx, 3-misc */
+	pdata->dt_irq_rx = platform_get_irq(pdev, 1);
+	if (pdata->dt_irq_rx < 0)
+			return -3;
+
+	pdata->dt_irq_tx = platform_get_irq(pdev, 2);
+	if (pdata->dt_irq_tx < 0)
+				return -3;
 
 	/* GEMAC clock */
 	pdata->dt_clk = devm_clk_get(&pdev->dev, BB_GEMAC_CLK);
 	if (IS_ERR(pdata->dt_clk))
-		return -6;
+		return -4;
 
-	/* MDIO */
-	for_each_available_child_of_node(pdev->dev.of_node, child_node) {
-		if (!strcmp(child_node->name, "mdio")) {
-			DBG("found MDIO\n");
-//			of_property_read_u32(child_node, "", &pdata->dt_mdio);
-		}
-	}
-//	if (pdata->dt_mdio )
+	/* phy-handle */
+	pdata->dt_phy_node = of_parse_phandle(pdev->dev.of_node, "phy-handle", 0);
+	if (pdata->dt_phy_node)
+		return -5;
 
 	DBG("<--%s\n", __FUNCTION__);
 
 	return 0;
 }
 
+/**
+ * Apply resources gotten from DT
+ * @param pdata private data containing DT resources
+ */
 static int bb_gemac_apply_resources(struct gemac_private *pdata)
 {
+	int result;
+
 	DBG("-->%s\n", __FUNCTION__);
 
-	pdata->ws = devm_ioremap_resource(&pdata->pdev->dev, pdata->dt_ws);
-	if (IS_ERR(pdata->ws))
-		return PTR_ERR(pdata->ws);
+	/* Map GEMAC registers */
+	pdata->gemac_regs = devm_ioremap_resource(&pdata->pdev->dev, pdata->dt_gemac_registers);
+	if (IS_ERR(pdata->gemac_regs))
+		return PTR_ERR(pdata->gemac_regs);
 
-	pdata->ss = devm_ioremap_resource(&pdata->pdev->dev, pdata->dt_ss);
-	if (IS_ERR(pdata->ss))
-		return PTR_ERR(pdata->ss);
+	/* Enable clock */
+	result = clk_prepare_enable(pdata->dt_clk);
+	if (result)
+		return -1;
 
-//	pdata->mdio = devm_ioremap_resource(&pdata->pdev->dev, pdata->dt_mdio);
-//	if (IS_ERR(pdata->mdio))
-//		return PTR_ERR(pdata->mdio);
-
-//	if (!pdata->dt_mac)
-
+	/* Setup MAC */
+	if (pdata->dt_mac) {
+		ether_addr_copy(pdata->ndev->dev_addr, pdata->dt_mac);
+	} else {
+		netdev_info(pdata->ndev, "Use random MAC\n");
+		eth_hw_addr_random(pdata->ndev);
+	}
 
 	DBG("<--%s\n", __FUNCTION__);
 
@@ -119,6 +132,10 @@ static const struct net_device_ops gemac_net_ops = {
 		.ndo_start_xmit = bb_gemac_start_xmit,
 };
 
+/**
+ * Probe the device. Acquire resource, map.
+ * @param bb_gemac_dev platform device
+ */
 static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 {
 	int result;
@@ -149,6 +166,34 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	if (result)
 			goto disable_sth;
 
+	/* Setup NAPI */
+	netif_napi_add(pdata->ndev, &pdata->napi_rx, poll_rx, NAPI_POLL_WEIGHT);
+	netif_tx_napi_add(pdata->ndev, &pdata->napi_tx, poll_tx, NAPI_POLL_WEIGHT);
+
+	/*
+	 * NOTE: Access to configuration PHY is implemented by build in
+	 *       MDIO controller. MDIO driver is in davinci_mdio.c
+	 *       Driver create MDIO bus with capability to access controller
+	 *       registers.
+	 *
+	 *       This driver use MDIO bus to scan all PHYs connected to it.
+	 *       By default Beagle Bone Black use PHY LAN8710A which places
+	 *       in drivers/net/phy/smsc.c
+	 */
+
+	/* Scan MDIO bus to get PHYs and attach to the ETH device */
+	//TODO:
+	//phy = phy_find_first(bus);
+
+	/* Initialize locks */
+	//TODO:
+
+	/* Initialize service works */
+	//TODO:
+
+	/* Setup ethtool callback */
+	//TODO:
+
 	/* Complete registration */
 	result = register_netdev(gemac);
 	if (result)
@@ -164,6 +209,10 @@ disable_sth:
 	return -1;
 }
 
+/**
+ * Remove bb ethernet device
+ * @param bb_gemac_dev platform device
+ */
 static int bb_gemac_remove(struct platform_device *bb_gemac_dev)
 {
 	struct net_device *gemac;
@@ -199,5 +248,5 @@ static struct platform_driver bb_gmac_driver = {
 module_platform_driver(bb_gmac_driver);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Beagle Bone Black GMAC driver");
+MODULE_DESCRIPTION("Beagle Bone Black GEMAC driver");
 MODULE_AUTHOR("vmitrofanov <mitrofanovmailbox@gmail.com>");
