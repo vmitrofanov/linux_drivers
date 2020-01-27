@@ -24,6 +24,21 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  * ---------------------------------------------------------------------------
  */
+
+/*
+ * NOTE: Due to separation and nature of common device now I use implementation
+ *       of hot and cold probe. Cold probe is called as usual in platform
+ *       device. And warm probe is called under control of parent device. This
+ *       method is a bad case of architecture, so see TODO. Cold probe could not
+ *       use registers but warm can! Load driver and wait parent driver to
+ *       continue initialization.
+ *
+ * TODO: As this MDIO controller is built in BB Ethernet GEMAC controller and
+ *       now it is separate platform device it would be better to built in MIDO
+ *       controller functionality into GEMAC controller than use it separately.
+ */
+
+
 #define pr_fmt(fmt) "MDIO: " fmt
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -42,6 +57,8 @@
 #include <linux/of_device.h>
 #include <linux/of_mdio.h>
 #include <linux/pinctrl/consumer.h>
+
+#include "davinci_mdio_int.h"
 
 /*
  * This timeout definition is a worst-case ultra defensive measure against
@@ -111,6 +128,8 @@ struct davinci_mdio_data {
 #if IS_ENABLED(CONFIG_OF)
 static void davinci_mdio_update_dt_from_phymask(u32 phy_mask);
 #endif
+
+static struct platform_device *davinci_mdio_plat;
 
 static void davinci_mdio_init_clk(struct davinci_mdio_data *data)
 {
@@ -363,8 +382,13 @@ static const struct of_device_id davinci_mdio_of_mtable[] = {
 MODULE_DEVICE_TABLE(of, davinci_mdio_of_mtable);
 #endif
 
-static int davinci_mdio_probe(struct platform_device *pdev)
+/**
+ * Warm probe is called when parent controller clock is enabled.
+ * This function has to be called from parent driver.
+ */
+static int davinci_mdio_warm_probe(void)
 {
+	struct platform_device *pdev = davinci_mdio_plat;
 	struct mdio_platform_data *pdata = dev_get_platdata(&pdev->dev);
 	struct device *dev = &pdev->dev;
 	struct davinci_mdio_data *data;
@@ -373,96 +397,115 @@ static int davinci_mdio_probe(struct platform_device *pdev)
 	int ret, addr;
 	int autosuspend_delay_ms = -1;
 
+	pr_info("%s\n", __FUNCTION__);
+
 	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+		if (!data)
+			return -ENOMEM;
 
-	data->bus = devm_mdiobus_alloc(dev);
-	if (!data->bus) {
-		dev_err(dev, "failed to alloc mii bus\n");
-		return -ENOMEM;
-	}
+		data->bus = devm_mdiobus_alloc(dev);
+		if (!data->bus) {
+			dev_err(dev, "failed to alloc mii bus\n");
+			return -ENOMEM;
+		}
 
-	if (IS_ENABLED(CONFIG_OF) && dev->of_node) {
-		const struct of_device_id	*of_id;
+		if (IS_ENABLED(CONFIG_OF) && dev->of_node) {
+			const struct of_device_id	*of_id;
 
-		ret = davinci_mdio_probe_dt(&data->pdata, pdev);
+			ret = davinci_mdio_probe_dt(&data->pdata, pdev);
+			if (ret)
+				return ret;
+			snprintf(data->bus->id, MII_BUS_ID_SIZE, "%s", pdev->name);
+
+			of_id = of_match_device(davinci_mdio_of_mtable, &pdev->dev);
+			if (of_id) {
+				const struct davinci_mdio_of_param *of_mdio_data;
+
+				of_mdio_data = of_id->data;
+				if (of_mdio_data)
+					autosuspend_delay_ms =
+						of_mdio_data->autosuspend_delay_ms;
+			}
+		} else {
+			data->pdata = pdata ? (*pdata) : default_pdata;
+			snprintf(data->bus->id, MII_BUS_ID_SIZE, "%s-%x",
+				 pdev->name, pdev->id);
+		}
+
+		data->bus->name		= dev_name(dev);
+		data->bus->read		= davinci_mdio_read,
+		data->bus->write	= davinci_mdio_write,
+		data->bus->reset	= davinci_mdio_reset,
+		data->bus->parent	= dev;
+		data->bus->priv		= data;
+
+		data->clk = devm_clk_get(dev, "fck");
+		if (IS_ERR(data->clk)) {
+			dev_err(dev, "failed to get device clock\n");
+			return PTR_ERR(data->clk);
+		}
+
+		dev_set_drvdata(dev, data);
+		data->dev = dev;
+
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+		data->regs = devm_ioremap_resource(dev, res);
+		if (IS_ERR(data->regs))
+			return PTR_ERR(data->regs);
+
+		davinci_mdio_init_clk(data);
+
+		pm_runtime_set_autosuspend_delay(&pdev->dev, autosuspend_delay_ms);
+		pm_runtime_use_autosuspend(&pdev->dev);
+		pm_runtime_enable(&pdev->dev);
+
+		/* register the mii bus
+		 * Create PHYs from DT only in case if PHY child nodes are explicitly
+		 * defined to support backward compatibility with DTs which assume that
+		 * Davinci MDIO will always scan the bus for PHYs detection.
+		 */
+		if (dev->of_node && of_get_child_count(dev->of_node)) {
+			data->skip_scan = true;
+			ret = of_mdiobus_register(data->bus, dev->of_node);
+		} else {
+			ret = mdiobus_register(data->bus);
+		}
 		if (ret)
-			return ret;
-		snprintf(data->bus->id, MII_BUS_ID_SIZE, "%s", pdev->name);
+			goto bail_out;
 
-		of_id = of_match_device(davinci_mdio_of_mtable, &pdev->dev);
-		if (of_id) {
-			const struct davinci_mdio_of_param *of_mdio_data;
-
-			of_mdio_data = of_id->data;
-			if (of_mdio_data)
-				autosuspend_delay_ms =
-					of_mdio_data->autosuspend_delay_ms;
+		/* scan and dump the bus */
+		for (addr = 0; addr < PHY_MAX_ADDR; addr++) {
+			phy = mdiobus_get_phy(data->bus, addr);
+			if (phy) {
+				dev_info(dev, "phy[%d]: device %s, driver %s\n",
+					 phy->mdio.addr, phydev_name(phy),
+					 phy->drv ? phy->drv->name : "unknown");
+			}
 		}
-	} else {
-		data->pdata = pdata ? (*pdata) : default_pdata;
-		snprintf(data->bus->id, MII_BUS_ID_SIZE, "%s-%x",
-			 pdev->name, pdev->id);
-	}
 
-	data->bus->name		= dev_name(dev);
-	data->bus->read		= davinci_mdio_read,
-	data->bus->write	= davinci_mdio_write,
-	data->bus->reset	= davinci_mdio_reset,
-	data->bus->parent	= dev;
-	data->bus->priv		= data;
+		pr_err("DAVINCI: probed successfully\n");
+		return 0;
 
-	data->clk = devm_clk_get(dev, "fck");
-	if (IS_ERR(data->clk)) {
-		dev_err(dev, "failed to get device clock\n");
-		return PTR_ERR(data->clk);
-	}
+	bail_out:
+		pm_runtime_dont_use_autosuspend(&pdev->dev);
+		pm_runtime_disable(&pdev->dev);
+		return ret;
+}
 
-	dev_set_drvdata(dev, data);
-	data->dev = dev;
+/**
+ * MDIO is a part of BB Ethernet controller which is not loaded yet,
+ * that means MDIO clock is off. Here we just prepare callback
+ * to call driver initialization from the head driver.
+ */
+static int davinci_mdio_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	data->regs = devm_ioremap_resource(dev, res);
-	if (IS_ERR(data->regs))
-		return PTR_ERR(data->regs);
-
-	davinci_mdio_init_clk(data);
-
-	pm_runtime_set_autosuspend_delay(&pdev->dev, autosuspend_delay_ms);
-	pm_runtime_use_autosuspend(&pdev->dev);
-	pm_runtime_enable(&pdev->dev);
-
-	/* register the mii bus
-	 * Create PHYs from DT only in case if PHY child nodes are explicitly
-	 * defined to support backward compatibility with DTs which assume that
-	 * Davinci MDIO will always scan the bus for PHYs detection.
-	 */
-	if (dev->of_node && of_get_child_count(dev->of_node)) {
-		data->skip_scan = true;
-		ret = of_mdiobus_register(data->bus, dev->of_node);
-	} else {
-		ret = mdiobus_register(data->bus);
-	}
-	if (ret)
-		goto bail_out;
-
-	/* scan and dump the bus */
-	for (addr = 0; addr < PHY_MAX_ADDR; addr++) {
-		phy = mdiobus_get_phy(data->bus, addr);
-		if (phy) {
-			dev_info(dev, "phy[%d]: device %s, driver %s\n",
-				 phy->mdio.addr, phydev_name(phy),
-				 phy->drv ? phy->drv->name : "unknown");
-		}
-	}
+	/* Save global platform driver into private variable for inner use */
+	davinci_mdio_plat = pdev;
+	dev_set_drvdata(dev, &davinci_mdio_warm_probe);
 
 	return 0;
-
-bail_out:
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
-	pm_runtime_disable(&pdev->dev);
-	return ret;
 }
 
 static int davinci_mdio_remove(struct platform_device *pdev)
@@ -561,7 +604,7 @@ static void davinci_mdio_update_dt_from_phymask(u32 phy_mask)
 
 				*phy_id_p = cpu_to_be32(addr);
 
-				of_update_property(slave_p, phy_id_property);
+				//of_update_property(slave_p, phy_id_property);
 				pr_info("davinci_mdio: dt: updated phy_id[%d] from phy_mask[%x]\n", addr, phy_mask);
 
 				++addr;
