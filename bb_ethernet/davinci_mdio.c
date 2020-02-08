@@ -277,11 +277,12 @@ static int davinci_mdio_read(struct mii_bus *bus, int phy_id, int phy_reg)
 	if (phy_reg & ~PHY_REG_MASK || phy_id & ~PHY_ID_MASK)
 		return -EINVAL;
 
-	ret = pm_runtime_get_sync(data->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(data->dev);
-		return ret;
-	}
+//	ret = pm_runtime_get_sync(data->dev);
+//	if (ret < 0) {
+//		pm_runtime_put_noidle(data->dev);
+//		pr_err("pm read: %d\n", ret);
+//		return ret;
+//	}
 
 	reg = (USERACCESS_GO | USERACCESS_READ | (phy_reg << 21) |
 	       (phy_id << 16));
@@ -308,6 +309,8 @@ static int davinci_mdio_read(struct mii_bus *bus, int phy_id, int phy_reg)
 
 	pm_runtime_mark_last_busy(data->dev);
 	pm_runtime_put_autosuspend(data->dev);
+
+	pr_err("read: %d\n", ret);
 	return ret;
 }
 
@@ -321,11 +324,12 @@ static int davinci_mdio_write(struct mii_bus *bus, int phy_id,
 	if (phy_reg & ~PHY_REG_MASK || phy_id & ~PHY_ID_MASK)
 		return -EINVAL;
 
-	ret = pm_runtime_get_sync(data->dev);
-	if (ret < 0) {
-		pm_runtime_put_noidle(data->dev);
-		return ret;
-	}
+//	ret = pm_runtime_get_sync(data->dev);
+//	if (ret < 0) {
+//		pm_runtime_put_noidle(data->dev);
+//		pr_err("pm write: %d\n", ret);
+//		return ret;
+//	}
 
 	reg = (USERACCESS_GO | USERACCESS_WRITE | (phy_reg << 21) |
 		   (phy_id << 16) | (phy_data & USERACCESS_DATA));
@@ -348,6 +352,7 @@ static int davinci_mdio_write(struct mii_bus *bus, int phy_id,
 	pm_runtime_mark_last_busy(data->dev);
 	pm_runtime_put_autosuspend(data->dev);
 
+	pr_err("write: %d\n", ret);
 	return ret;
 }
 
@@ -416,6 +421,7 @@ static int davinci_mdio_warm_probe(void)
 			if (ret)
 				return ret;
 			snprintf(data->bus->id, MII_BUS_ID_SIZE, "%s", pdev->name);
+			pr_err("bus->id: %s\n", data->bus->id);
 
 			of_id = of_match_device(davinci_mdio_of_mtable, &pdev->dev);
 			if (of_id) {
@@ -438,6 +444,8 @@ static int davinci_mdio_warm_probe(void)
 		data->bus->reset	= davinci_mdio_reset,
 		data->bus->parent	= dev;
 		data->bus->priv		= data;
+		data->bus->owner	= THIS_MODULE;
+		pr_err("bus->name: %s\n", data->bus->name);
 
 		data->clk = devm_clk_get(dev, "fck");
 		if (IS_ERR(data->clk)) {
@@ -459,6 +467,9 @@ static int davinci_mdio_warm_probe(void)
 		pm_runtime_use_autosuspend(&pdev->dev);
 		pm_runtime_enable(&pdev->dev);
 
+		pr_err("bus->irq[0]: %d\n", data->bus->irq[0]);
+		pr_err("bus->irq[1]: %d\n", data->bus->irq[1]);
+
 		/* register the mii bus
 		 * Create PHYs from DT only in case if PHY child nodes are explicitly
 		 * defined to support backward compatibility with DTs which assume that
@@ -466,25 +477,30 @@ static int davinci_mdio_warm_probe(void)
 		 */
 		if (dev->of_node && of_get_child_count(dev->of_node)) {
 			data->skip_scan = true;
+			pr_err("of_mdiobus_register\n");
 			ret = of_mdiobus_register(data->bus, dev->of_node);
 		} else {
+			pr_err("mdiobus_register\n");
 			ret = mdiobus_register(data->bus);
 		}
 		if (ret)
 			goto bail_out;
 
+		pr_err("Start scan and dump the bus...\n");
+
 		/* scan and dump the bus */
 		for (addr = 0; addr < PHY_MAX_ADDR; addr++) {
 			phy = mdiobus_get_phy(data->bus, addr);
 			if (phy) {
-				dev_info(dev, "phy[%d]: device %s, driver %s\n",
+				pr_err("phy[%d]: device %s, driver %s\n",
 					 phy->mdio.addr, phydev_name(phy),
 					 phy->drv ? phy->drv->name : "unknown");
+
+				pr_err("phy->irq: %d\n", phy->irq);
 			}
 		}
 
 		pr_err("DAVINCI: probed successfully\n");
-		return 0;
 
 	bail_out:
 		pm_runtime_dont_use_autosuspend(&pdev->dev);
@@ -736,9 +752,10 @@ static const struct dev_pm_ops davinci_mdio_pm_ops = {
 
 static struct platform_driver davinci_mdio_driver = {
 	.driver = {
-		.name	 = "davinci_mdio",
+		.name	 = "davinci_mdio_custom",
 		.pm	 = &davinci_mdio_pm_ops,
 		.of_match_table = of_match_ptr(davinci_mdio_of_mtable),
+		.owner = THIS_MODULE,
 	},
 	.probe = davinci_mdio_probe,
 	.remove = davinci_mdio_remove,
@@ -757,4 +774,4 @@ static void __exit davinci_mdio_exit(void)
 module_exit(davinci_mdio_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("DaVinci MDIO driver");
+MODULE_DESCRIPTION("Custom DaVinci MDIO driver");
