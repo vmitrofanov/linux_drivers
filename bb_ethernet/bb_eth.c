@@ -1,15 +1,31 @@
-#include <linux/module.h>
-#include <linux/platform_device.h>
-#include <linux/of_device.h>
-#include <linux/netdevice.h>
-#include <linux/etherdevice.h>
-#include <linux/of.h>
-#include <linux/of_device.h>
-#include <linux/of_net.h>
-#include <linux/clk.h>
-
 #include "bb_eth.h"
 #include "bb_drv.h"
+#include "bb_mdio.h"
+
+/**
+ * NOW IT IS NOT NECESSARY. I fixed DT and not it always  powered on!
+ * DELETE WHEN FINISH DIRIVER. OBSOLETE!
+ */
+#if 0
+static int bb_power_up(struct device *dev)
+{
+	int result;
+
+	pm_runtime_enable(dev);
+	result = pm_runtime_get_sync(dev);
+	if (result < 0) {
+		pm_runtime_put_noidle(dev);
+	}
+
+	return result;
+}
+#endif
+
+static void gemac_link_handler(struct net_device *ndev)
+{
+        DBG("-->%s\n", __FUNCTION__);
+        DBG("<--%s\n", __FUNCTION__);
+}
 
 /**
  * UP interface
@@ -76,17 +92,30 @@ static int bb_gemac_get_resources(struct gemac_private *pdata)
 
 	pdata->dt_irq_tx = platform_get_irq(pdev, 2);
 	if (pdata->dt_irq_tx < 0)
-				return -3;
+			return -3;
 
 	/* GEMAC clock */
-	pdata->dt_clk = devm_clk_get(&pdev->dev, BB_GEMAC_CLK);
-	if (IS_ERR(pdata->dt_clk))
-		return -4;
+//	pdata->dt_clk = devm_clk_get(&pdev->dev, BB_GEMAC_CLK);
+//	if (IS_ERR(pdata->dt_clk))
+//		return -4;
 
-	/* phy-handle */
-	pdata->dt_phy_node = of_parse_phandle(pdev->dev.of_node, "phy-handle", 0);
-	if (pdata->dt_phy_node)
-		return -5;
+	/* MDIO */
+	pdata->mdio.parent = &pdev->dev;
+	pdata->mdio.clk = devm_clk_get(&pdev->dev, BB_GEMAC_CLK);
+	if (IS_ERR(pdata->mdio.clk))
+			return -4;
+
+	//TODO: get child by name because of many child are possible
+	pdata->mdio.node = of_get_next_available_child(pdev->dev.of_node, NULL);
+	if (of_property_read_u32(pdata->mdio.node, "bus_freq", &pdata->mdio.bus_freq) < 0) {
+			pr_err("Missing bus_freq property in the DT.\n");
+			return -4;
+	}
+
+	/* PHY */
+//	pdata->dt_phy_node = of_parse_phandle(pdev->dev.of_node, "phy-handle", 0);
+//	if (!pdata->dt_phy_node)
+//		return -5;
 
 	DBG("<--%s\n", __FUNCTION__);
 
@@ -107,6 +136,9 @@ static int bb_gemac_apply_resources(struct gemac_private *pdata)
 	pdata->gemac_regs = devm_ioremap_resource(&pdata->pdev->dev, pdata->dt_gemac_registers);
 	if (IS_ERR(pdata->gemac_regs))
 		return PTR_ERR(pdata->gemac_regs);
+
+	/* Set up MDIO registers */
+	pdata->mdio.regs = pdata->gemac_regs + BB_MDIO_OFFSET;
 
 	/* Enable clock */
 	result = clk_prepare_enable(pdata->dt_clk);
@@ -153,35 +185,59 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	pdata->ndev = gemac;
 	pdata->pdev = bb_gemac_dev;
 	platform_set_drvdata(bb_gemac_dev, pdata);
+	SET_NETDEV_DEV(gemac, &bb_gemac_dev->dev);
 
 	/* Setup required net device fields */
 	gemac->netdev_ops = &gemac_net_ops;
 
 	result = bb_gemac_get_resources(pdata);
 	if (result)
-			goto disable_sth;
+			goto err_get_resources;
 
-	/* Apply gotten resources to driver */
 	result = bb_gemac_apply_resources(pdata);
 	if (result)
-			goto disable_sth;
+			goto err_apply_resources;
+
+#if 0
+	bb_power_on(&bb_gemac_dev->dev);
+#endif
+
+    /* Select default pin state */
+    pinctrl_pm_select_default_state(&bb_gemac_dev->dev);
+
+#if 0
+    /* Just to check version for debugging usage */
+    {
+    	int reg = 0;
+    	pr_err(">>>> read MDIO version...\n");
+    	reg = readl(pdata->gemac_regs + 0x1000);
+    	pr_err(">>>>MDIO version is: %08x\n", reg);
+
+    	pr_err(">>>> read CPDMA version...\n");
+    	reg = readl(pdata->gemac_regs + 0x800);
+    	pr_err(">>>>CPDMA version is: %08x\n", reg);
+
+    	pr_err(">>>> read SS version...\n");
+    	reg = readl(pdata->gemac_regs);
+    	pr_err(">>>>SS version is: %08x\n", reg);
+    }
+#endif
+
 
 	/* Setup NAPI */
 	netif_napi_add(pdata->ndev, &pdata->napi_rx, poll_rx, NAPI_POLL_WEIGHT);
 	netif_tx_napi_add(pdata->ndev, &pdata->napi_tx, poll_tx, NAPI_POLL_WEIGHT);
 
-	/*
-	 * NOTE: Access to configuration PHY is implemented by build in
-	 *       MDIO controller. MDIO driver is in davinci_mdio.c
-	 *       Driver create MDIO bus with capability to access controller
-	 *       registers.
-	 *
-	 *       This driver use MDIO bus to scan all PHYs connected to it.
-	 *       By default Beagle Bone Black use PHY LAN8710A which places
-	 *       in drivers/net/phy/smsc.c
-	 */
+    result = bb_mdio_create(&pdata->mdio);
+    if (result)
+    	goto err_mdio;
 
-	/* Scan MDIO bus to get PHYs and attach to the ETH device */
+    pdata->phy = phy_connect(gemac,
+    		BB_PHY_NAME,
+            gemac_link_handler,
+            pdata->dt_phy_interface);
+
+
 	//TODO:
 	//phy = phy_find_first(bus);
 
@@ -192,21 +248,35 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	//TODO:
 
 	/* Setup ethtool callback */
+
 	//TODO:
 
 	/* Complete registration */
 	result = register_netdev(gemac);
 	if (result)
-		goto disable_sth;
+		goto err_complete_reg;
 
 	netif_carrier_off(gemac);
+
+    phy_attached_info(pdata->phy);
+    phy_start(pdata->phy);
 
 	DBG("<--%s\n", __FUNCTION__);
 	return 0;
 
-disable_sth:
+err_complete_reg:
+	DBG("err_complete_reg\n");
+
+err_mdio:
+	DBG("err_mdio\n");
+
+err_apply_resources:
+	DBG("err_apply_resources\n");
+
+err_get_resources:
 	DBG("RESULT: %d\n", result);
-	return -1;
+
+	return result;
 }
 
 /**
@@ -231,7 +301,7 @@ static int bb_gemac_remove(struct platform_device *bb_gemac_dev)
 }
 
 static struct of_device_id dt_compatible_table[] = {
-		{.compatible = "mvv,bb-gmac"},
+		{.compatible = "mvv,bb-eth"},
 		{/* sentinel */}
 };
 
