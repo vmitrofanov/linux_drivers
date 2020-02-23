@@ -293,6 +293,8 @@ static int bb_gemac_remove(struct platform_device *bb_gemac_dev)
 	pdata = platform_get_drvdata(bb_gemac_dev);
 	gemac = pdata->ndev;
 
+	bb_mdio_destroy(&pdata->mdio);
+
 	unregister_netdev(gemac);
 	free_netdev(gemac);
 
