@@ -6,7 +6,7 @@
  * NOW IT IS NOT NECESSARY. I fixed DT and not it always  powered on!
  * DELETE WHEN FINISH DIRIVER. OBSOLETE!
  */
-#if 0
+#ifdef BB_POWER_ON_SUPPORT
 static int bb_power_up(struct device *dev)
 {
 	int result;
@@ -28,8 +28,8 @@ static void gemac_link_handler(struct net_device *ndev)
 }
 
 /**
- * UP interface
- * @param gemac associated net-device
+ * bb_gemac_open() - UP interface
+ * @gemac: associated net-device
  */
 static int bb_gemac_open(struct net_device *gemac)
 {
@@ -40,8 +40,8 @@ static int bb_gemac_open(struct net_device *gemac)
 }
 
 /**
- * DOWN interface
- * @param gemac associated net-device
+ * bb_gemac_stop() - DOWN interface
+ * @gemac: associated net-device
  */
 static int bb_gemac_stop(struct net_device *gemac)
 {
@@ -52,9 +52,9 @@ static int bb_gemac_stop(struct net_device *gemac)
 }
 
 /**
- * Start transferring net-data gotten from the stack
- * @param sk net-data
- * @gemac gemac associated net-device
+ * bb_gemac_start_xmit() - start transferring net-data gotten from the stack
+ * @sk: net-data
+ * @gemac: associated net-device
  */
 static netdev_tx_t bb_gemac_start_xmit(struct sk_buff *sk, struct net_device *gemac)
 {
@@ -65,8 +65,39 @@ static netdev_tx_t bb_gemac_start_xmit(struct sk_buff *sk, struct net_device *ge
 }
 
 /**
- * Acquire resources from DT
- * @param pdata storage for resources
+ * bb_mac_init() - initialize MAC (SS and WR) with applied resources
+ * @gemac: store HW callbacks and parameters to setup
+ *
+ * RETURN: 0 - ok -1 - failure
+ */
+static int bb_mac_init(struct gemac_private *gemac)
+{
+	int ret = -1;
+	u32 mac_control = 0;
+
+	DBG("-->%s\n", __FUNCTION__);
+
+	/* Beaglebone black always runs in 100 Mbit RMII mode */
+	mac_control |= BIT(15);
+
+	/* Full duplex */
+	mac_control = BIT(0);
+
+	readw()
+
+	DBG("<--%s\n", __FUNCTION__);
+
+	return 0;
+
+err:
+	return -1;
+}
+
+/**
+ * bb_gemac_get_resources() - acquire resources from DT
+ * @pdata: storage for resources
+ *
+ * RETURN: 0 - ok negative - failure
  */
 static int bb_gemac_get_resources(struct gemac_private *pdata)
 {
@@ -123,8 +154,10 @@ static int bb_gemac_get_resources(struct gemac_private *pdata)
 }
 
 /**
- * Apply resources gotten from DT
- * @param pdata private data containing DT resources
+ * bb_gemac_apply_resources() - apply resources gotten from DT
+ * @pdata: private data containing DT resources
+ *
+ * RETURN: 0 - ok negative - failure
  */
 static int bb_gemac_apply_resources(struct gemac_private *pdata)
 {
@@ -146,7 +179,7 @@ static int bb_gemac_apply_resources(struct gemac_private *pdata)
 		return -1;
 
 	/* Setup MAC */
-	if (pdata->dt_mac) {
+	if (pdata->dt_mac && is_valid_ether_addr(pdata->dt_mac)) {
 		ether_addr_copy(pdata->ndev->dev_addr, pdata->dt_mac);
 	} else {
 		netdev_info(pdata->ndev, "Use random MAC\n");
@@ -165,8 +198,10 @@ static const struct net_device_ops gemac_net_ops = {
 };
 
 /**
- * Probe the device. Acquire resource, map.
- * @param bb_gemac_dev platform device
+ * bb_gemac_probe() - Probe the device. Acquire resource, map.
+ * @bb_gemac_dev: platform device
+ *
+ * RETURN: 0 - ok negative - failure
  */
 static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 {
@@ -198,7 +233,7 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	if (result)
 			goto err_apply_resources;
 
-#if 0
+#ifdef BB_POWER_ON_SUPPORT
 	bb_power_on(&bb_gemac_dev->dev);
 #endif
 
@@ -223,11 +258,7 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
     }
 #endif
 
-
-	/* Setup NAPI */
-	netif_napi_add(pdata->ndev, &pdata->napi_rx, poll_rx, NAPI_POLL_WEIGHT);
-	netif_tx_napi_add(pdata->ndev, &pdata->napi_tx, poll_tx, NAPI_POLL_WEIGHT);
-
+	/* Create MDIO bus, scan and initialize PHYs  */
     result = bb_mdio_create(&pdata->mdio);
     if (result)
     	goto err_mdio;
@@ -237,9 +268,14 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
             gemac_link_handler,
             pdata->dt_phy_interface);
 
+    /* Initialize MAC */
+    result = bb_mac_init(pdata);
+    if (result)
+    	goto err_mac;
 
-	//TODO:
-	//phy = phy_find_first(bus);
+	/* Setup NAPI */
+	netif_napi_add(pdata->ndev, &pdata->napi_rx, poll_rx, NAPI_POLL_WEIGHT);
+	netif_tx_napi_add(pdata->ndev, &pdata->napi_tx, poll_tx, NAPI_POLL_WEIGHT);
 
 	/* Initialize locks */
 	//TODO:
@@ -248,7 +284,6 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	//TODO:
 
 	/* Setup ethtool callback */
-
 	//TODO:
 
 	/* Complete registration */
@@ -263,6 +298,10 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 
 	DBG("<--%s\n", __FUNCTION__);
 	return 0;
+
+err_mac:
+	DBG("err_complete_reg\n");
+	bb_mdio_destroy(&pdata->mdio);
 
 err_complete_reg:
 	DBG("err_complete_reg\n");
@@ -280,8 +319,10 @@ err_get_resources:
 }
 
 /**
- * Remove bb ethernet device
- * @param bb_gemac_dev platform device
+ * bb_gemac_remove() - Remove bb ethernet device
+ * @bb_gemac_dev: platform device
+ *
+ * RETURN: 0 - OK
  */
 static int bb_gemac_remove(struct platform_device *bb_gemac_dev)
 {
