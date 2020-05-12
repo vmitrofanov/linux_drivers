@@ -20,7 +20,7 @@
 
 #define MDIO_TIMEOUT		100 /* msecs */
 #define PHY_REG_MASK		0x1f
-#define PHY_ID_MASK			0x1f
+#define PHY_ID_MASK		0x1f
 
 
 static void bb_mdio_init_clk(struct bb_mdio *data)
@@ -93,7 +93,7 @@ static inline int wait_for_user_access(struct bb_mdio *data)
 		 * state machine.  We need to reset and retry the current
 		 * operation
 		 */
-		pr_info("MDIO: Resetting idled controller\n");
+		pr_err("MDIO: Resetting idled controller\n");
 		bb_mdio_enable(data);
 		return -EAGAIN;
 	}
@@ -189,16 +189,16 @@ static int bb_mdio_read(struct mii_bus *bus, int phy_id, int phy_reg)
 
 	while (1) {
 		ret = wait_for_user_access(data);
-		if (ret == -EAGAIN)
-			continue;
+//		if (ret == -EAGAIN)
+//			continue;
 		if (ret < 0)
 			break;
 
 		__raw_writel(reg, &data->regs->user[0].access);
 
 		ret = wait_for_user_access(data);
-		if (ret == -EAGAIN)
-			continue;
+//		if (ret == -EAGAIN)
+//			continue;
 		if (ret < 0)
 			break;
 
