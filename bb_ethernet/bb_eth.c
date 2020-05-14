@@ -6,6 +6,7 @@
  * NOW IT IS NOT NECESSARY. I fixed DT and not it always  powered on!
  * DELETE WHEN FINISH DIRIVER. OBSOLETE!
  */
+//#define BB_POWER_ON_SUPPORT
 #ifdef BB_POWER_ON_SUPPORT
 static int bb_power_up(struct device *dev)
 {
@@ -106,37 +107,34 @@ static int bb_mac_init(struct gemac_private *gemac)
 {
 	u32 mac_control = 0;
 	u32 reg;
+	int i;
 
 	DBG("-->%s\n", __FUNCTION__);
-//
-//	if (phy->speed == 1000)
-//		mac_control |= BIT(7);	/* GIGABITEN	*/
-//	if (phy->duplex)
-//		mac_control |= BIT(0);	/* FULLDUPLEXEN	*/
-//
-//	/* set speed_in input in case RMII mode is used in 100Mbps */
-//	if (phy->speed == 100)
-//		mac_control |= BIT(15);
-//	/* in band mode only works in 10Mbps RGMII mode */
-//	else if ((phy->speed == 10) && phy_interface_is_rgmii(phy))
-//		mac_control |= BIT(18); /* In Band mode */
-//
-//	if (priv->rx_pause)
-//		mac_control |= BIT(3);
-//
-//	if (priv->tx_pause)
-//		mac_control |= BIT(4);
 
+	/* Reset MAC */
 	__raw_writel(1, &gemac->eth_switch.regs->soft_reset);
+
+	/* Enable ALE */
+	reg = readl(&gemac->ale.regs->control);
+	reg |= BIT(31);
+	reg |= BIT(30);
+//	reg |= BIT(4); //?
+	reg &= ~BIT(2);
+	__raw_writel(reg, &gemac->ale.regs->control);
+
+	/* Enable ALE forwarding on all ports */
+	for (i = 0; i < 5; ++i)
+		writel(3, &gemac->ale.regs->portctl[i]);
+
+	/* Set up priority mapping */
 	__raw_writel(0x76543210, &gemac->port1.regs->tx_pri_map);
 	__raw_writel(0, &gemac->port1.regs->rx_dscp_pri_map[0]);
 
-	reg = readl(&gemac->ale.regs->control);
-	/* Enable ALE */
-	reg |= BIT(31);
-	/* Clear ALE table */
-	reg |= BIT(30);
-	__raw_writel(reg, &gemac->ale.regs->control);
+	/* Disable priority elevation and enable statistics on all ports */
+	__raw_writel(0, &gemac->eth_switch.regs->ptype);
+
+        /* Enable statistics collection only on the all ports */
+        __raw_writel(7, &gemac->eth_switch.regs->stat_port_en);
 
 	/* Beaglebone black always runs in 100 Mbit RMII mode */
 	mac_control |= BIT(15);
@@ -147,27 +145,20 @@ static int bb_mac_init(struct gemac_private *gemac)
 	/* Release Rx Tx */
 	mac_control |= BIT(5);
 
-//	__raw_writel(mac_control, &slave->sliver->mac_control);
 	__raw_writel(mac_control, &gemac->sliver_port1.regs->mac_control);
 
-	__raw_writel(RX_PRIORITY_MAPPING, &gemac->sliver_port1.regs->rx_pri_map);
-
 	/* Setup MAC */
-//	slave_write(slave, mac_hi(priv->mac_addr), SA_HI);
-//	slave_write(slave, mac_lo(priv->mac_addr), SA_LO);
 	__raw_writel(BB_GET_MAC_HI(gemac->dt_mac), &gemac->port1.regs->mac_hi);
 	__raw_writel(BB_GET_MAC_LO(gemac->dt_mac), &gemac->port1.regs->mac_lo);
 
+//	__raw_writel(0x76543210, &gemac->sliver_port1.regs->rx_pri_map);
+//	__raw_writel(0x33221100, &gemac->port1.regs->tx_pri_map);
 
-	__raw_writel(0x76543210, &gemac->sliver_port1.regs->rx_pri_map);
-	__raw_writel(0x33221100, &gemac->port1.regs->tx_pri_map);
-//	__raw_writel(0x76543210, &slave->sliver->rx_pri_map);
-//	__raw_writel(0x33221100, &slave->regs->tx_pri_map);
+//	__raw_writel(0x7, &gemac->eth_switch.regs->flow_control);//?
+
 
 	/* Max len */
 	__raw_writel(1500, &gemac->sliver_port1.regs->rx_maxlen);
-
-
 
 	DBG("<--%s\n", __FUNCTION__);
 
@@ -365,14 +356,29 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 		goto err_apply_resources;
 
 #ifdef BB_POWER_ON_SUPPORT
-	bb_power_on(&bb_gemac_dev->dev);
+	bb_power_up(&bb_gemac_dev->dev);
 #endif
 
 	/* Select default pin state */
+//	{
+//		u32 __iomem *tx0 = ioremap(0x44E10940, 4);
+//		if (tx0) {
+//			pr_err("tx0 0: %08x\n", readl(tx0));
+//			iounmap(tx0);
+//		}
+//	}
 
 	result = pinctrl_pm_select_default_state(&bb_gemac_dev->dev);
 	if (result)
 		goto err_apply_resources;
+
+//	{
+//		u32 __iomem *tx0 = ioremap(0x44E10940, 4);
+//		if (tx0) {
+//			pr_err("tx0 1: %08x\n", readl(tx0));
+//			iounmap(tx0);
+//		}
+//	}
 
 #if 0
     /* Just to check version for debugging usage */
@@ -408,8 +414,8 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 		goto err_mac;
 
 	/* Setup NAPI */
-	netif_napi_add(pdata->ndev, &pdata->napi_rx, poll_rx, NAPI_POLL_WEIGHT);
-	netif_tx_napi_add(pdata->ndev, &pdata->napi_tx, poll_tx, NAPI_POLL_WEIGHT);
+	netif_napi_add(pdata->ndev, &pdata->rx_ring.napi, poll_rx, NAPI_POLL_WEIGHT);
+	netif_tx_napi_add(pdata->ndev, &pdata->tx_ring.napi, poll_tx, NAPI_POLL_WEIGHT);
 
 	/* Initialize locks */
 	//TODO:

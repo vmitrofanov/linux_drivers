@@ -179,6 +179,15 @@ struct bb_ale
 	u32	idver;
 	u32	_reserved1;
 	u32	control;
+	u32	_reserved2;
+	u32	unknown_vlan;
+	u32	_reserved3;
+	u32	tblctl;
+	u32	_reserved4[4];
+	u32	tblw2;
+	u32	tblw1;
+	u32	tblw0;
+	u32	portctl[6];
 };
 
 struct bb_stats_reg
@@ -293,8 +302,6 @@ struct gemac_private
 	phy_interface_t dt_phy_interface;
 
 	/* Software device resources */
-	struct napi_struct napi_rx;
-	struct napi_struct napi_tx;
 	struct ring tx_ring;
 	struct ring rx_ring;
 

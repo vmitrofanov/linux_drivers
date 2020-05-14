@@ -3,20 +3,26 @@
 #include "bb_drv.h"
 #include "bb_eth.h"
 
-static void print_rx_ring(struct gemac_private *gemac)
+static void print_rx_ring(struct ring *ring)
 {
-	struct ring *ring = &gemac->rx_ring;
 	struct hw_desc *desc;
 	int i;
+	u32 *buf;
 
-	for (i = 0; i < 10; ++i) {
+	for (i = 0; i < 1; ++i) {
 		desc = ring->desc_ring[i].desc_cpu;
+		buf = ring->desc_ring[i].buf_cpu;
+
 		pr_err("ring: %d    [d1: %08x, d2: %08x, d3: %08x, d4: %08x]\n",
 				i,
 				readl((__iomem void *)&desc->next),
 				readl((__iomem void *)&desc->buf),
 				readl((__iomem void *)&desc->len),
 				readl((__iomem void *)&desc->opt));
+
+		pr_err("%08x %08x %08x %08x %08x %08x\n", buf[0], buf[1],
+							  buf[2], buf[3],
+							  buf[4], buf[5]);
 	}
 }
 
@@ -51,7 +57,7 @@ netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	hw_desc->next = 0;
 	hw_desc->buf = sw_desc->buf_dma;
 	hw_desc->len = sw_desc->buf_size;
-	writel(CPDMA_DESC_OWNER | CPDMA_DESC_SOP | CPDMA_DESC_EOP, (__iomem void*)&hw_desc->opt);
+	writel(CPDMA_DESC_OWNER | CPDMA_DESC_SOP | CPDMA_DESC_EOP | sw_desc->buf_size, (__iomem void*)&hw_desc->opt);
 //	hw_desc->opt = CPDMA_DESC_OWNER | CPDMA_DESC_SOP | CPDMA_DESC_EOP;
 
 	/* Start transmission */
@@ -74,10 +80,14 @@ netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 }
 
 
-int poll_rx(struct napi_struct *napi, int weight)
+int poll_rx(struct napi_struct *rx_napi, int weight)
 {
-	DBG("-->%s\n", __FUNCTION__);
-	DBG("<--%s\n", __FUNCTION__);
+	struct ring *rx_ring = container_of(rx_napi, struct ring, napi);
+
+	DBG("------------------>%s \n", __FUNCTION__);
+	//TODO: drop here
+//	print_rx_ring(rx_ring);
+	DBG("<-----------------%s \n", __FUNCTION__);
 
 	return 0;
 }
@@ -91,18 +101,40 @@ int poll_tx(struct napi_struct *napi, int weight)
 
 irqreturn_t rx_interrupt(int irq, void *dev_id)
 {
+	struct gemac_private *gemac = dev_id;
+
 	DBG("-->%s \n", __FUNCTION__);
-//	struct cpsw_common *cpsw = dev_id;
-//
-//	cpdma_ctlr_eoi(cpsw->dma, CPDMA_EOI_RX);
-//	writel(0, &cpsw->wr_regs->rx_en);
-//
-//	if (cpsw->quirk_irq) {
-//		disable_irq_nosync(cpsw->irqs_table[0]);
-//		cpsw->rx_irq_disabled = true;
-//	}
-//
-//	napi_schedule(&cpsw->napi_rx);
+
+#if 0
+	/* This is bool shit */
+	pr_err("%08x\n",readl(&gemac->dma.regs->dma_intstat_raw));
+	pr_err("%08x\n",readl(&gemac->dma.regs->dma_intstat_masked));
+	pr_err("%08x\n",readl(&gemac->dma.regs->dma_intmask_clear));
+	pr_err("%08x\n",readl(&gemac->dma.regs->dma_intmask_set));
+
+	pr_err("%08x\n",readl(&gemac->dma.regs->rx_intstat_raw));
+	pr_err("%08x\n",readl(&gemac->dma.regs->rx_intstat_masked));
+	pr_err("%08x\n",readl(&gemac->dma.regs->rx_intmask_clear));
+	pr_err("%08x\n",readl(&gemac->dma.regs->rx_intmask_set));
+
+	pr_err("%08x\n",readl(&gemac->dma.regs->tx_intstat_raw));
+	pr_err("%08x\n",readl(&gemac->dma.regs->tx_intstat_masked));
+	pr_err("%08x\n",readl(&gemac->dma.regs->tx_intmask_clear));
+	pr_err("%08x\n",readl(&gemac->dma.regs->tx_intmask_set));
+
+	writel(0xFF, &gemac->dma.regs->dma_intmask_clear);
+	writel(0xFF, &gemac->dma.regs->rx_intmask_clear);
+	writel(0xFF, &gemac->dma.regs->tx_intmask_clear);
+#else
+	writel(0x1, &gemac->dma.regs->cpdma_eoi_vector); //For What???
+	writel(0, &gemac->eth_wr.regs->rx_en);
+
+#endif
+
+	disable_irq_nosync(gemac->dt_irq_rx);
+	//TODO: if use napi_schedule() it never called poll. Maybe because it is not prepared???!!!
+	__napi_schedule(&gemac->rx_ring.napi);
+
 	DBG("<--%s\n", __FUNCTION__);
 
 	return IRQ_HANDLED;
@@ -116,7 +148,6 @@ void bb_enable_interrupts(struct gemac_private *gemac)
 
 	//TODO: now enable all interrupts
 	__raw_writel(0xFF, &gemac->dma.regs->rx_intmask_set);
-
 
 	enable_irq(gemac->dt_irq_rx);
 }
@@ -211,9 +242,6 @@ int bb_init_rings(struct gemac_private *gemac)
 
 	DBG("-->%s\n", __FUNCTION__);
 
-//	/* Move DMA to idle state */
-//	writel(BIT(3), &gemac->dma.regs->dma_control);
-
 	/* Reset DMA */
 	writel(1, &gemac->dma.regs->cpdma_soft_reset);
 	while (readl(&gemac->dma.regs->cpdma_soft_reset) && --timeout_cnt)
@@ -221,9 +249,6 @@ int bb_init_rings(struct gemac_private *gemac)
 
 	if (readl(&gemac->dma.regs->cpdma_soft_reset))
 		return -1;
-
-//	/* Move DMA from idle state */
-//	writel(0, &gemac->dma.regs->dma_control);
 
 	/* Zero ring head pointer */
 	for (i = 0; i < BB_DMA_CHANNELS_NUMBER; ++i) {
@@ -256,13 +281,8 @@ int bb_init_rings(struct gemac_private *gemac)
 
 void bb_start_dma_engine(struct gemac_private *gemac)
 {
-	print_rx_ring(gemac);
-
 	__raw_writel(1, &gemac->dma.regs->rx_control);
 	__raw_writel(1, &gemac->dma.regs->tx_control);
-
-	pr_err("rx_control: %08x\n", readl(&gemac->dma.regs->rx_control));
-	pr_err("tx_control: %08x\n", readl(&gemac->dma.regs->tx_control));
 }
 
 
