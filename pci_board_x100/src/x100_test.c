@@ -1,5 +1,5 @@
 /**
- * author: mvv
+ * author: vmitrofanov
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,10 +7,8 @@
 #include "x100_driver.h"
 #include "x100_map.h"
 
-/* Prototypes ----------------------------------------------------------------*/
 int x100_memory_test( unsigned int start_address, unsigned int size );
 
-/* Main ----------------------------------------------------------------------*/
 int main( void )
 {
     if( x100_init( "/dev/uio0" ) )
@@ -38,7 +36,6 @@ int main( void )
     return 0;
 }
 
-/* Functions -----------------------------------------------------------------*/
 int x100_memory_test( unsigned int start_address, unsigned int size )
 {
     unsigned int i = 0;

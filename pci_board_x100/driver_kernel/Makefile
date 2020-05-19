@@ -1,5 +1,5 @@
 #
-# author: mvv
+# author: vmitrofanov
 #
 obj-m += x100_kernel.o
 

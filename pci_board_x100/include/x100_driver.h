@@ -1,13 +1,11 @@
 /**
- * author: mvv
+ * author: vmitrofanov
  */
 #if !defined( X100_DRIVER_H_ )
 #define X100_DRIVER_H_
-
-/* Defines -------------------------------------------------------------------*/
+	
 #define PCI_DEVICE_RESOURCE_LEN     512
 
-/* Types ---------------------------------------------------------------------*/
 typedef enum
 {
     int_sdhc_dma = 0x08000000,
@@ -26,7 +24,6 @@ typedef struct
     unsigned char *addr;
 } pci_t;
 
-/* Prototypes ----------------------------------------------------------------*/
 /**
  * Initialize x100 device
  * @param path to uio, usually /dev/uio0

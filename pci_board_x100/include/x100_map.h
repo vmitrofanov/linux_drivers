@@ -1,5 +1,5 @@
 /**
- * author: mvv
+ * author: vmitrofanov
  */
 #if !defined( X100_MEMORY_MAP_H_ )
 #define X100_MEMORY_MAP_H_

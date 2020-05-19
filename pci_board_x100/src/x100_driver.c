@@ -1,5 +1,5 @@
 /**
- * author: mvv
+ * author: vmitrofanov
  */
 #include <stdio.h>
 #include <sys/mman.h>
@@ -17,16 +17,13 @@
 #define PCI_ADDRESS_SPACE_LEN                           0x04000000
 #define PCI_CONTROLLER_ADDR                             0x001F0000
 
-/* Prototypes ----------------------------------------------------------------*/
 static void x100_set_bar1_frame_pointer(unsigned int physical_address);
 
-/* Variables -----------------------------------------------------------------*/
 static pci_t pci_device[BAR_COUNT];         /* x100 access points */
 static unsigned int bar1_frame_pointer = 0; /* Used for inner usage */
 static int is_driver_init = -1;
 static int device_file_disc = -1;
 
-/* Functions -----------------------------------------------------------------*/
 int x100_init( char *uio_path )
 {
     unsigned int i = 0;
