@@ -28,8 +28,8 @@ static int irq_enable_disable_handler(struct uio_info *dev_info, s32 irq_on);
 static irqreturn_t irq_handler(int irq, struct uio_info *dev_info);
 
 static struct pci_device_id pci_ids[] = {
-	{ PCI_DEVICE( VENDOR_ID, DEVICE_ID ), },
-	{ 0, }
+	{PCI_DEVICE( VENDOR_ID, DEVICE_ID ),},
+	{0,}
 };
 
 static struct pci_driver x100_pci_device_structure = {
@@ -43,7 +43,8 @@ MODULE_DEVICE_TABLE(pci, pci_ids);
 MODULE_LICENSE(MOD_LICENSE);
 MODULE_AUTHOR(MOD_AUTHOR);
 
-static int irq_enable_disable_handler(struct uio_info *dev_info, s32 irq_on) {
+static int irq_enable_disable_handler(struct uio_info *dev_info, s32 irq_on) 
+{
 	unsigned int *maskr = PCI_CTRL(PCI_CTRL_MASKR_PCI);
     
 	if( irq_on == 0 )
@@ -56,7 +57,8 @@ static int irq_enable_disable_handler(struct uio_info *dev_info, s32 irq_on) {
     return 0;
 }
 
-static irqreturn_t irq_handler(int irq, struct uio_info *dev_info) {
+static irqreturn_t irq_handler(int irq, struct uio_info *dev_info) 
+{
 	volatile unsigned int *irq_status = PCI_CTRL(PCI_CTRL_QSTR_PCI);
 	volatile unsigned int *mbr_cpu = PCI_CTRL(PCI_CTRL_MBR_CPU);
 
@@ -70,7 +72,8 @@ static irqreturn_t irq_handler(int irq, struct uio_info *dev_info) {
 }
 
 static int x100_pci_probe(struct pci_dev *pci_dev,
-			  const struct pci_device_id *id) {
+			  const struct pci_device_id *id) 
+{
 	struct uio_info *info = NULL;
 
 	info = kzalloc(sizeof(struct uio_info), GFP_KERNEL);
@@ -143,7 +146,8 @@ out_free:
 	return -ENODEV;
 }
 
-static void x100_pci_remove(struct pci_dev *pci_dev) {
+static void x100_pci_remove(struct pci_dev *pci_dev) 
+{
 	struct uio_info *info = NULL;
 
 	info = pci_get_drvdata(pci_dev);
@@ -159,11 +163,13 @@ static void x100_pci_remove(struct pci_dev *pci_dev) {
 	dev_info(&pci_dev->dev, "[OK] module remove\n");
 }
 
-static int __init x100_init_module(void) {
+static int __init x100_init_module(void) 
+{
 	return pci_register_driver(&x100_pci_device_structure);
 }
 
-static void __exit x100_exit_module(void) {
+static void __exit x100_exit_module(void) 
+{
 	pci_unregister_driver( &x100_pci_device_structure );
 }
 
