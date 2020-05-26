@@ -115,9 +115,9 @@ struct bb_switch_regs
 
 struct bb_port_regs
 {
-	u32	control;
-	u32	_reserved1;
-	u32	max_blks;
+	u32	control;	//0
+	u32	_reserved1;	//4
+	u32	max_blks;	//8
 	u32	blk_cnt;
 	u32	tx_in_ctl;
 	u32	port_vlan;
@@ -280,6 +280,7 @@ struct gemac_private
 	/* Memory mapped resources */
 	void __iomem *gemac_regs;
 	struct bb_switch eth_switch;
+	struct bb_port port0;
 	struct bb_port port1;
 	struct bb_port port2;
 	struct bb_dma dma;

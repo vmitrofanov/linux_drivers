@@ -6,7 +6,7 @@ ARCH := arm
 CROSS_COMPILE := arm-linux-gnueabi-
 
 all:
-	make ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) -C ../../linux M=$(PWD) C=1 modules
+	make ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) -C ../../linux M=$(PWD) /*C=1*/ modules
 
 clean:
 	make ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) -C ../../linux M=$(PWD) clean

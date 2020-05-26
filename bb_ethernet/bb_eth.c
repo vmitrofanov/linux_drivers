@@ -70,6 +70,11 @@ static int bb_gemac_open(struct net_device *ndev)
 		goto err_request;
 	}
 
+	napi_enable(&gemac->rx_ring.napi);
+	napi_enable(&gemac->tx_ring.napi);
+
+	netif_start_queue(ndev);
+
 	bb_alloc_ring(gemac, &gemac->rx_ring, 1);
 	bb_alloc_ring(gemac, &gemac->tx_ring, 0);
 	bb_init_rings(gemac);
@@ -89,9 +94,38 @@ err_request:
  * bb_gemac_stop() - DOWN interface
  * @gemac: associated net-device
  */
-static int bb_gemac_stop(struct net_device *gemac)
+static int bb_gemac_stop(struct net_device *ndev)
 {
+	struct gemac_private *gemac = netdev_priv(ndev);
+	struct ring *rx_ring = &gemac->rx_ring;
+	struct ring *tx_ring = &gemac->tx_ring;
+	size_t size;
+
+	int i;
+
 	DBG("-->%s\n", __FUNCTION__);
+
+	napi_disable(&gemac->rx_ring.napi);
+	napi_disable(&gemac->tx_ring.napi);
+
+	bb_stop_dma_engine(gemac);
+	netif_carrier_off(ndev);
+
+	for (i = 0; i < gemac->ring_size; ++i) {
+		dma_free_coherent(&gemac->pdev->dev, sizeof(struct hw_desc),
+				  rx_ring->desc_ring[i].desc_cpu,
+				  rx_ring->desc_ring[i].desc_dma);
+
+		dma_free_coherent(&gemac->pdev->dev, sizeof(struct hw_desc),
+				  tx_ring->desc_ring[i].desc_cpu,
+				  tx_ring->desc_ring[i].desc_dma);
+
+		dma_unmap_single(&gemac->pdev->dev,
+				 rx_ring->desc_ring[i].buf_dma,
+				 rx_ring->desc_ring[i].buf_size,
+				 DMA_TO_DEVICE);
+	}
+
 	DBG("<--%s\n", __FUNCTION__);
 
 	return 0;
@@ -127,7 +161,6 @@ static int bb_mac_init(struct gemac_private *gemac)
 		writel(3, &gemac->ale.regs->portctl[i]);
 
 	/* Set up priority mapping */
-	__raw_writel(0x76543210, &gemac->port1.regs->tx_pri_map);
 	__raw_writel(0, &gemac->port1.regs->rx_dscp_pri_map[0]);
 
 	/* Disable priority elevation and enable statistics on all ports */
@@ -151,11 +184,18 @@ static int bb_mac_init(struct gemac_private *gemac)
 	__raw_writel(BB_GET_MAC_HI(gemac->dt_mac), &gemac->port1.regs->mac_hi);
 	__raw_writel(BB_GET_MAC_LO(gemac->dt_mac), &gemac->port1.regs->mac_lo);
 
-//	__raw_writel(0x76543210, &gemac->sliver_port1.regs->rx_pri_map);
-//	__raw_writel(0x33221100, &gemac->port1.regs->tx_pri_map);
+	__raw_writel(0x76543210, &gemac->sliver_port1.regs->rx_pri_map);
+	__raw_writel(0x33221100, &gemac->port1.regs->tx_pri_map);
+//	__raw_writel(0x00000000, &gemac->port1.regs->tx_pri_map);
 
-//	__raw_writel(0x7, &gemac->eth_switch.regs->flow_control);//?
-
+	__raw_writel(0x7, &gemac->eth_switch.regs->flow_control);//?
+//	__raw_writel((3 << 4) || (3), &gemac->port1.regs->max_blks);
+//	__raw_writel(0x33, &gemac->port0.regs->max_blks);
+//	__raw_writel(0x33, &gemac->port1.regs->max_blks);
+//	__raw_writel(0x33, &gemac->port2.regs->max_blks);
+	pr_err("port0 max_blks: %08x\n", readl(&gemac->port0.regs->max_blks));
+	pr_err("port1 max_blks: %08x\n", readl(&gemac->port1.regs->max_blks));
+	pr_err("port2 max_blks: %08x\n", readl(&gemac->port2.regs->max_blks));
 
 	/* Max len */
 	__raw_writel(1500, &gemac->sliver_port1.regs->rx_maxlen);
@@ -194,8 +234,15 @@ static int bb_gemac_get_resources(struct gemac_private *pdata)
 	dt = of_get_mac_address(pdev->dev.of_node);
 	if (dt)
 		memcpy(pdata->dt_mac, dt, ETH_ALEN);
-	else
+	else {
+//		pdata->dt_mac[0] = 0xAB;
+//		pdata->dt_mac[1] = 0xBC;
+//		pdata->dt_mac[2] = 0xCD;
+//		pdata->dt_mac[3] = 0xDE;
+//		pdata->dt_mac[4] = 0xEF;
+//		pdata->dt_mac[5] = 0xFF;
 		memset(pdata->dt_mac, 0, ETH_ALEN);
+	}
 
 	/* Interrupts. 0-rx_thresh, 1-rx, 2-tx, 3-misc */
 	pdata->dt_irq_rx = platform_get_irq(pdev, 1);
@@ -267,6 +314,7 @@ static int bb_gemac_apply_resources(struct gemac_private *pdata)
 	/* Assign memory mapped resources to its handler structures */
 	pdata->sliver_port1.regs = pdata->gemac_regs + BB_SLIVER_PORT1;
 	pdata->sliver_port2.regs = pdata->gemac_regs + BB_SLIVER_PORT2;
+	pdata->port0.regs = pdata->gemac_regs + BB_PORT0_OFFSET;
 	pdata->port1.regs = pdata->gemac_regs + BB_PORT1_OFFSET;
 	pdata->port2.regs = pdata->gemac_regs + BB_PORT2_OFFSET;
 	pdata->eth_ts.regs = pdata->gemac_regs + BB_TIME_SYNC_OFFSET;
@@ -284,7 +332,7 @@ static int bb_gemac_apply_resources(struct gemac_private *pdata)
 
 	/* Setup MAC */
 	//TODO: check entire address instead of first bit
-	if ((pdata->dt_mac[0] != 0) && is_valid_ether_addr(pdata->dt_mac)) {
+	if ((pdata->dt_mac[0] != 0)/* && is_valid_ether_addr(pdata->dt_mac)*/) {
 		ether_addr_copy(pdata->ndev->dev_addr, pdata->dt_mac);
 	} else {
 		netdev_info(pdata->ndev, "Use random MAC\n");

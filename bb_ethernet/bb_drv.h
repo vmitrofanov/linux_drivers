@@ -4,6 +4,8 @@
 #include <linux/netdevice.h>
 #include <linux/interrupt.h>
 #include <linux/types.h>
+#include <linux/if_vlan.h>
+#include <linux/etherdevice.h>
 #include "bb_eth.h"
 
 /* Descriptor mode bits */
@@ -18,8 +20,26 @@
 #define CPDMA_DESC_PORT_MASK	(BIT(18) | BIT(17) | BIT(16))
 #define CPDMA_DESC_CRC_LEN	4
 
+#define CPDMA_EOI_RX		1
+#define CPDMA_MAX_CHAN		8
+#define CPDMA_PKT_MAX_LEN	0x7FF
+
 /* Helper macros */
 #define NEXT_DESC(cur_desc)	((cur_desc + 1) % 512)
+#define MTU_TO_FRAME_SIZE(x) ((x) + VLAN_ETH_HLEN)
+#define MTU_TO_BUF_SIZE(x) (MTU_TO_FRAME_SIZE(x) + NET_IP_ALIGN + 4)
+#define ALE_TABLE_WRITE		BIT(31)
+
+/* Address lookup engine */
+#define ALE_ENTRY_BITS		68
+#define ALE_ENTRY_WORDS	DIV_ROUND_UP(ALE_ENTRY_BITS, 32)
+#define ALE_SECURE			BIT(0)
+#define ALE_BLOCKED			BIT(1)
+#define ALE_SUPER			BIT(2)
+#define ALE_VLAN			BIT(3)
+#define BITMASK(bits)		(BIT(bits) - 1)
+#define ALE_TABLE_CONTROL	0x20
+#define ALE_TABLE		0x34
 
 /**
  * GEMAC NAPI rx polling method
@@ -37,6 +57,7 @@ int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring,
 		   int alloc_buffers);
 int bb_init_rings(struct gemac_private *gemac);
 void bb_start_dma_engine(struct gemac_private *gemac);
+void bb_stop_dma_engine(struct gemac_private *gemac);
 netdev_tx_t bb_gemac_start_xmit(struct sk_buff *sk, struct net_device *ndev);
 
 #endif
