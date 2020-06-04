@@ -1,6 +1,6 @@
 obj-m += eth.o
 
-eth-objs := bb_eth.o bb_drv.o bb_mdio.o
+eth-objs := bb_eth.o bb_drv.o bb_mdio.o bb_ale.o
 
 ARCH := arm
 CROSS_COMPILE := arm-linux-gnueabi-

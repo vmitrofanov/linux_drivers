@@ -1,6 +1,7 @@
 #include "bb_eth.h"
 #include "bb_drv.h"
 #include "bb_mdio.h"
+#include "bb_ale.h"
 
 /**
  * NOW IT IS NOT NECESSARY. I fixed DT and not it always  powered on!
@@ -456,10 +457,14 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	pdata->phy = phy_connect(gemac, BB_PHY_NAME, gemac_link_handler,
 			    	 pdata->dt_phy_interface);
 
-	/* Initialize MAC */
+	/* Initialize subsystems */
 	result = bb_mac_init(pdata);
 	if (result)
 		goto err_mac;
+
+	result = bb_ale_init(pdata);
+	if (result)
+		goto err_ale;
 
 	/* Setup NAPI */
 	netif_napi_add(pdata->ndev, &pdata->rx_ring.napi, poll_rx, NAPI_POLL_WEIGHT);
@@ -486,9 +491,11 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 
 	DBG("<--%s\n", __FUNCTION__);
 	return 0;
+err_ale:
+	DBG("ALE error\n");
 
 err_mac:
-	DBG("err_complete_reg\n");
+	DBG("MAC error\n");
 	bb_mdio_destroy(&pdata->mdio);
 
 err_complete_reg:
