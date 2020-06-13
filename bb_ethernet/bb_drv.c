@@ -32,14 +32,14 @@ netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	struct ring *tx_ring = &gemac->tx_ring;
 	struct dma_desc *sw_desc;
 	struct hw_desc *hw_desc;
-	u32 cur = tx_ring->cur;
+	struct netdev_queue *txq;
 	int out = 200;
 	int circles = 0;
-	static int it = 0;
-
+	int q_idx = skb_get_queue_mapping(skb);
+	txq = netdev_get_tx_queue(ndev, q_idx);
 
 //	DBG("-->%s\n", __FUNCTION__);
-	sw_desc = &tx_ring->desc_ring[cur];
+	sw_desc = &tx_ring->desc_ring[tx_ring->cur];
 
 	sw_desc->skb = skb;
 	sw_desc->buf_size = skb->len;
@@ -57,7 +57,6 @@ netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	hw_desc->len = sw_desc->buf_size;
 	hw_desc->opt = CPDMA_DESC_OWNER | CPDMA_DESC_SOP | CPDMA_DESC_EOP |
 		       sw_desc->buf_size | BIT(20) | 0x10000; //TODO:
-
 	wmb();
 
 	/* Start transmission */
@@ -68,15 +67,18 @@ netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		++circles;
 	}
 	if (!out)
-		pr_err("run out of out!!!!!!!!!!\n");
+		DBG("run out of out!!!!!!!!!!\n");
 
 	writel(sw_desc->desc_dma, &gemac->dma.stream->tx_cp[0]);
-	pr_err("TX(%d)   circles: %d   d0:d1:d2:d3 = %08x:%08x:%08x:%08x\n", cur,
-	       circles, hw_desc->next, hw_desc->buf, hw_desc->len, hw_desc->opt);
+	DBG("TX(%d)   circles: %d   d0:d1:d2:d3 = %08x:%08x:%08x:%08x\n",
+		tx_ring->cur, circles, hw_desc->next, hw_desc->buf,
+		hw_desc->len, hw_desc->opt);
 
 //	bb_print_buf(skb->data, skb->len);
+	gemac->ndev->stats.tx_packets++;
+	gemac->ndev->stats.tx_bytes += skb->len;
 
-	tx_ring->cur = NEXT_DESC(cur);
+	tx_ring->cur = NEXT_DESC(tx_ring->cur);
 
 //	DBG("<--%s\n", __FUNCTION__);
 
@@ -87,14 +89,13 @@ static int process_rx_ring(struct ring *rx_ring, int budget)
 {
 	struct gemac_private *gemac = container_of(rx_ring, struct gemac_private,
 						   rx_ring);
-	int cur = rx_ring->cur;
 	struct hw_desc *hw_desc;
-	struct dma_desc *desc = rx_ring->desc_ring + cur;
+	struct dma_desc *desc = rx_ring->desc_ring + rx_ring->cur;
 	struct sk_buff *skb;
 	u32 *buf;
 	int processed = 0;
 
-//	DBG("-->%s\n", __FUNCTION__);
+	DBG("process_rx_ring >>>>> CUR: %d DIRTY: %d\n", rx_ring->cur, rx_ring->dirty);
 
 	while(processed < budget) {
 		hw_desc = desc->desc_cpu;
@@ -107,25 +108,19 @@ static int process_rx_ring(struct ring *rx_ring, int budget)
 			desc->buf_size = hw_desc->len & CPDMA_PKT_MAX_LEN;
 
 		desc->buf_size -= 4;
-#if 1
+
 		dma_sync_single_for_cpu(&gemac->pdev->dev, desc->buf_dma,
 					desc->buf_size,
 					DMA_FROM_DEVICE);
-#else
-		dma_unmap_single(&gemac->ndev->dev, desc->buf_dma,
-				 desc->buf_size, DMA_FROM_DEVICE);
-#endif
 
-#if 1
 		buf = desc->buf_cpu;
 		skb = netdev_alloc_skb(gemac->ndev,
 				       MTU_TO_BUF_SIZE(gemac->ndev->mtu));
 		if (!skb)
 			break;
-#else
-		skb = desc->skb;
-		desc->skb = NULL;
-#endif
+
+		desc->skb = skb;
+
 		skb_reserve(skb, NET_IP_ALIGN);
 		skb_copy_to_linear_data(skb, buf, desc->buf_size);
 		skb_put(skb, desc->buf_size);
@@ -133,31 +128,180 @@ static int process_rx_ring(struct ring *rx_ring, int budget)
 		gemac->ndev->stats.rx_packets++;
 		gemac->ndev->stats.rx_bytes += desc->buf_size;
 
-//		skb_checksum_none_assert(skb);
-//		skb->dev = gemac->ndev;
-//		skb->ip_summed = CHECKSUM_UNNECESSARY;
+#if 0
+		skb_checksum_none_assert(skb);
+		skb->dev = gemac->ndev;
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+#endif
 
 		if (NET_RX_SUCCESS != netif_receive_skb(skb))
-			pr_err("packet dropped          !!!!!!!!!!!!!!!!!!!!!!\n");
-		else
-			pr_err("packet sucess           ++++++++++++++++++++++\n");
+			DBG("packet dropped by stack\n");
 
-		pr_err("RX(%d): d0:d1:d2:d3 = %08x:%08x:%08x:%08x\n",
+		DBG("RX(%d): d0:d1:d2:d3 = %08x:%08x:%08x:%08x\n",
 		       rx_ring->cur, hw_desc->next, hw_desc->buf, hw_desc->len,
 		       hw_desc->opt);
 //		bb_print_buf(buf/*skb->data*/, desc->buf_size);
 
 		/* Try to clear interrupt */
 		writel(desc->desc_dma, &gemac->dma.stream->rx_cp[0]);
+		writel(CPDMA_EOI_RX, &gemac->dma.regs->cpdma_eoi_vector);
 
 		++processed;
-		rx_ring->cur = NEXT_DESC(cur);
+		rx_ring->cur = NEXT_DESC(rx_ring->cur);
 		desc = rx_ring->desc_ring + rx_ring->cur;
+
+		DBG("process_rx_ring >>>>> +++ CUR: %d DIRTY: %d\n", rx_ring->cur, rx_ring->dirty);
+	}
+
+	return processed;
+}
+
+inline int get_dirty_num(struct gemac_private *gemac, struct ring *ring)
+{
+	size_t ring_size = gemac->ring_size;
+	int cur = ring->cur;
+	int dirty = ring->dirty;
+
+	return (cur >= dirty) ? cur - dirty : ring_size - dirty + cur;
+}
+
+int refill_rx(struct gemac_private *gemac)
+{
+	struct ring *rx = &gemac->rx_ring;
+	struct dma_desc *sw_desc;
+	struct hw_desc *hw_desc;
+	int dirty_num = get_dirty_num(gemac, rx);
+	int refilled = 0;
+	u32 opt = 0;
+
+#if 0
+//	DBG("-->%s\n", __FUNCTION__);
+	DBG("refill_rx ===================== cur: %d, dirty: %d\n", rx->cur, rx->dirty);
+	if (readl(&gemac->dma.stream->rx_hdp[0]) != 0)
+		return 0;
+
+#if 0
+	if (readl(&gemac->dma.stream->rx_hdp[0]) != 0)
+		return 0;
+#endif
+
+	sw_desc = rx->desc_ring + rx->cur;
+	hw_desc = (struct hw_desc *)sw_desc->desc_cpu;
+
+	dma_sync_single_for_device(&gemac->pdev->dev,
+				   sw_desc->buf_dma,
+				   gemac->buf_size,
+				   DMA_FROM_DEVICE);
+
+	hw_desc->next = 0;
+	hw_desc->buf = sw_desc->buf_dma;
+	hw_desc->len = gemac->buf_size;
+	hw_desc->opt = CPDMA_DESC_OWNER;
+
+//	rx->dirty = NEXT_DESC(rx->dirty);
+	mb();
+
+	DBG("refill_rx ===================== +++ cur: %d, dirty: %d\n", rx->cur, rx->dirty);
+
+//	sw_desc = rx->desc_ring + rx->dirty;
+	DBG(":: %08x\n", sw_desc->desc_dma);
+	writel(sw_desc->desc_dma, &gemac->dma.stream->rx_hdp[0]);
+
+	return 1;
+#endif
+
+#if 1
+	while (dirty_num--) {
+		++refilled;
+		sw_desc = rx->desc_ring + rx->dirty;
+		hw_desc = (struct hw_desc *)sw_desc->desc_cpu;
+
+		//todo: has it to be here or not
+//		dev_kfree_skb_any(sw_desc->skb);
+
+		dma_sync_single_for_device(&gemac->pdev->dev,
+					   sw_desc->buf_dma,
+					   gemac->buf_size,
+					   DMA_FROM_DEVICE);
+
+		opt = hw_desc->opt;
+		hw_desc->buf = sw_desc->buf_dma;
+		hw_desc->len = gemac->buf_size;
+		hw_desc->opt = CPDMA_DESC_OWNER;
+		if (opt & CPDMA_DESC_EOQ) {
+			hw_desc->next = 0;
+			if (readl(&gemac->dma.stream->rx_hdp[0]) != 0)
+				pr_err("ERR: ETH: DMA: rx_hdp != 0\n");
+			writel(rx->desc_ring->desc_dma, &gemac->dma.stream->rx_hdp[0]);
+			break;
+		} else {
+			rx->dirty = NEXT_DESC(rx->dirty);
+			sw_desc = rx->desc_ring + rx->dirty;
+			hw_desc->next = sw_desc->desc_dma;
+		}
+	}
+#endif
+
+#if 0
+{
+	int i = 0;
+	struct dma_desc *desc = rx->desc_ring;
+	for (i = 0; i < gemac->ring_size; ++i) {
+		hw_desc = (struct hw_desc *)desc[i].desc_cpu;
+
+		if (i + 1 < gemac->ring_size){
+			pr_err("next\n");
+			hw_desc->next = desc[i + 1].desc_dma;
+		} else {
+			pr_err("zero\n");
+			hw_desc->next = 0;
+		}
+		hw_desc->buf = desc[i].buf_dma;
+		hw_desc->len = gemac->buf_size;
+		hw_desc->opt = CPDMA_DESC_OWNER;
+		++refilled;
+	}
+	rx->cur = rx->dirty = 0;
+}
+#endif
+
+//	DBG("<--%s\n", __FUNCTION__);
+
+#if 0
+	/* Enable Rx queue */
+	writel(rx->desc_ring->desc_dma, &gemac->dma.stream->rx_hdp[0]);
+#endif
+
+	return refilled;
+}
+
+int refill_tx(struct gemac_private *gemac)
+{
+	struct ring *tx = &gemac->tx_ring;
+	struct dma_desc *sw_desc;
+	struct hw_desc *hw_desc;
+	int dirty_num = get_dirty_num(gemac, tx);
+	int refilled = 0;
+
+//	DBG("-->%s\n", __FUNCTION__);
+//	DBG("tx_dirty_num: %d\n", dirty_num);
+
+	while (dirty_num--) {
+		sw_desc = tx->desc_ring + tx->dirty;
+		hw_desc = (struct hw_desc *)sw_desc->desc_cpu;
+
+		if (hw_desc->opt & CPDMA_DESC_OWNER)
+			break;
+
+		dev_kfree_skb_any(sw_desc->skb);
+
+		tx->dirty = NEXT_DESC(tx->dirty);
+		++refilled;
 	}
 
 //	DBG("<--%s\n", __FUNCTION__);
 
-	return processed;
+	return refilled;
 }
 
 int poll_rx(struct napi_struct *rx_napi, int weight)
@@ -165,50 +309,95 @@ int poll_rx(struct napi_struct *rx_napi, int weight)
 	struct gemac_private *gemac = netdev_priv(rx_napi->dev);
 	struct ring *rx_ring = container_of(rx_napi, struct ring, napi);
 	int processed;
+	int refilled;
+
 
 //	DBG("-->%s\n", __FUNCTION__);
-
 	processed = process_rx_ring(rx_ring, weight);
 	if ((processed < weight) && napi_complete_done(rx_napi, processed)) {
-		writel(0xFF, &gemac->eth_wr.regs->rx_en);
+		DBG("stop NAPI & enable RX interrupts\n");
+		writel(0xFF, &gemac->eth_wr.regs->c0_rx_en);
 		enable_irq(gemac->dt_irq_rx);
-		pr_err("enable interrupts\n");
 	}
+
+	refilled = refill_tx(gemac);
+//	DBG("refilled tx: %d\n", refilled);
+
+	refilled = refill_rx(gemac);
+//	DBG("refilled rx: %d\n", refilled);
 
 //	DBG("<--%s\n", __FUNCTION__);
 
-	return 0;
+	return processed;
 }
 
-int poll_tx(struct napi_struct *napi, int weight)
+int poll_tx(struct napi_struct *tx_napi, int weight)
 {
+	struct gemac_private *gemac = netdev_priv(tx_napi->dev);
+
+	DBG("---------------------------------------------->%s\n", __FUNCTION__);
+
+	writel(0xFF, &gemac->eth_wr.regs->c0_tx_en);
+	enable_irq(gemac->dt_irq_tx);
+	pr_err("enable tx interrupts\n");
+
 	DBG("<--%s\n", __FUNCTION__);
 
 	return 0;
 }
 
+/*
+ * TODO: rewrite interrupt clearing due to page 2015 (14.3.1.3)
+ */
 irqreturn_t rx_interrupt(int irq, void *dev_id)
 {
 	struct gemac_private *gemac = dev_id;
 
-//	DBG("-->%s \n", __FUNCTION__);
+	DBG("-->%s \n", __FUNCTION__);
 
-	writel(CPDMA_EOI_RX, &gemac->dma.regs->cpdma_eoi_vector);
-	writel(0, &gemac->eth_wr.regs->rx_en);
+//	writel(0x0, &gemac->dma.regs->dma_intmask_clear);
+//	writel(0x0, &gemac->dma.regs->dma_intmask_set);
+
+	DBG("> channel: %08x\n", readl(&gemac->eth_wr.regs->c0_rx_stat));
+
+//	writel(CPDMA_EOI_RX, &gemac->dma.regs->cpdma_eoi_vector);
+//	writel(0, &gemac->eth_wr.regs->c0_rx_en); not necessary
 
 	disable_irq_nosync(gemac->dt_irq_rx);
 	napi_schedule_irqoff(&gemac->rx_ring.napi);
 
-//	DBG("<--%s\n", __FUNCTION__);
+	DBG("<--%s\n", __FUNCTION__);
 
 	return IRQ_HANDLED;
 }
 
+/*
+ * TODO: rewrite interrupt clearing due to page 2015 (14.3.1.3)
+ */
+irqreturn_t tx_interrupt(int irq, void *dev_id)
+{
+	struct gemac_private *gemac = dev_id;
 
+	DBG("-->%s \n", __FUNCTION__);
+
+	writel(CPDMA_EOI_TX, &gemac->dma.regs->cpdma_eoi_vector);
+	writel(0, &gemac->eth_wr.regs->c0_tx_en);
+
+	disable_irq_nosync(gemac->dt_irq_tx);
+	napi_schedule_irqoff(&gemac->tx_ring.napi);
+
+	DBG("<--%s\n", __FUNCTION__);
+
+	return IRQ_HANDLED;
+}
+
+/*
+ * TODO: rewrite interrupt clearing due to page 2015 (14.3.1.3)
+ */
 void bb_enable_interrupts(struct gemac_private *gemac)
 {
 //	writel(0xFF, &gemac->eth_wr.regs->tx_en);
-	writel(0xFF, &gemac->eth_wr.regs->rx_en);
+	writel(0xFF, &gemac->eth_wr.regs->c0_rx_en);
 
 	//TODO: now enable all interrupts
 //	__raw_writel(0xFF, &gemac->dma.regs->tx_intmask_set);
@@ -252,8 +441,7 @@ int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring, int alloc_buff
 	/* Allocate memory for descriptor buffer */
 	for (i = 0; i < gemac->ring_size; ++i) {
 #if 1
-		desc[i].buf_size = gemac->buf_size;
-		desc[i].buf_cpu = kmalloc(desc[i].buf_size, GFP_KERNEL);
+		desc[i].buf_cpu = kmalloc(gemac->buf_size, GFP_KERNEL);
 		if (!desc[i].buf_cpu) {
 			pr_err("Error, can't allocate buffer\n");
 			i_err = i;
@@ -280,21 +468,22 @@ int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring, int alloc_buff
 						 gemac->buf_size,
 						 DMA_FROM_DEVICE);
 
-		dma_sync_single_for_device(&gemac->pdev->dev,
-					   desc[i].buf_dma,
-					   desc[i].buf_size,
-					   DMA_FROM_DEVICE);
-
 		if (dma_mapping_error(&gemac->pdev->dev, desc[i].buf_dma)) {
 			pr_err("Error, can't map buffer\n");
 			i_err = i;
 			goto err_map_buf;
 		}
+
+		dma_sync_single_for_device(&gemac->pdev->dev,
+					   desc[i].buf_dma,
+					   gemac->buf_size,
+					   DMA_FROM_DEVICE);
+
 #else
 		desc[i].buf_cpu = skb_tail_pointer(desc[i].skb);
 		desc[i].buf_dma = dma_map_single(&gemac->ndev->dev,
 						 skb_tail_pointer(desc[i].skb),
-						 desc[i].buf_size,
+						 gemac->buf_size,
 						 DMA_FROM_DEVICE);
 
 		if (dma_mapping_error(&gemac->ndev->dev, desc[i].buf_dma)) {
@@ -368,8 +557,10 @@ int bb_init_rings(struct gemac_private *gemac)
 			hw_desc->next = 0;
 		hw_desc->buf = desc[i].buf_dma;
 		hw_desc->len = gemac->buf_size;
-		hw_desc->opt = CPDMA_DESC_OWNER;// | CPDMA_DESC_SOP | CPDMA_DESC_EOP; //SOP EOP ??? Not necessary and set by gemac
+		hw_desc->opt = CPDMA_DESC_OWNER;
 	}
+
+	ring->cur = ring->dirty = 0;
 
 	/* Enable Rx queue */
 	writel(desc[0].desc_dma, &gemac->dma.stream->rx_hdp[0]);

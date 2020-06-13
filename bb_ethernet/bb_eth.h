@@ -26,7 +26,7 @@
 #define BB_PHY_NAME             	"bb_mdiobus:0:00"
 
 #define BB_DMA_RING_DEFAULT_SIZE	512
-#define BB_DMA_BUF_DEFAULT_SIZE		1500
+#define BB_DMA_BUF_DEFAULT_SIZE		1600
 #define BB_DMA_CHANNELS_NUMBER		8
 
 #define BB_MDIO_OFFSET			0x1000
@@ -78,22 +78,26 @@ struct bb_sliver_regs
 
 struct bb_wr_regs
 {
-	u32	id_ver;
-	u32	soft_reset;
-	u32	control;
-	u32	int_control;
-	u32	rx_thresh_en;
-	u32	rx_en;
-	u32	tx_en;
-	u32	misc_en;
-	u32	mem_allign1[8];
-	u32	rx_thresh_stat;
-	u32	rx_stat;
-	u32	tx_stat;
-	u32	misc_stat;
-	u32	mem_allign2[8];
-	u32	rx_imax;
-	u32	tx_imax;
+	u32	id_ver;			//0
+	u32	soft_reset;		//4
+	u32	control;		//8
+	u32	int_control;		//C
+	u32	c0_rx_thresh_en;	//10
+	u32	c0_rx_en;		//14
+	u32	c0_tx_en;		//18
+	u32	c0_misc_en;		//1C
+	u32	c1_rx_thresh_en;	//20
+	u32	c1_rx_en;		//24
+	u32	c1_tx_en;		//28
+	u32	c1_misc_en;		//2C
+	u32	c2_rx_thresh_en;	//30
+	u32	c2_rx_en;		//34
+	u32	c2_tx_en;		//38
+	u32	c2_misc_en;		//3C
+	u32	c0_rx_thresh_stat;	//40
+	u32	c0_rx_stat;		//44
+	u32	c0_tx_stat;		//48
+	u32	c0_misc_stat;		//4C
 };
 
 struct bb_switch_regs
@@ -176,17 +180,19 @@ struct bb_dma_stream_regs
 
 struct bb_ale
 {
-	u32	idver;
-	u32	_reserved1;
-	u32	control;
-	u32	_reserved2;
-	u32	unknown_vlan;
-	u32	_reserved3;
-	u32	tblctl;
-	u32	_reserved4[4];
-	u32	tblw2;
-	u32	tblw1;
-	u32	tblw0;
+	u32	idver;			//0
+	u32	_reserved1;		//4
+	u32	control;		//8
+	u32	_reserved2;		//C
+	u32	prescale;		//10
+	u32	_reserved3;		//14
+	u32	unknown_vlan;		//18
+	u32	_reserved4;		//1C
+	u32	tblctl;			//20
+	u32	_reserved5[4];		//24 + 28 + 2C + 30
+	u32	tblw2;			//34
+	u32	tblw1;			//38
+	u32	tblw0;			//3C
 	u32	portctl[6];
 };
 
@@ -256,7 +262,6 @@ struct dma_desc
 	dma_addr_t buf_dma;
 	void *buf_cpu;
 	u32 buf_size;
-	/* In case of using descriptor for Tx */
 	struct sk_buff *skb;
 };
 

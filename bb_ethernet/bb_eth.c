@@ -67,8 +67,15 @@ static int bb_gemac_open(struct net_device *ndev)
 	ret = devm_request_irq(&gemac->pdev->dev, gemac->dt_irq_rx, rx_interrupt,
 			       0, dev_name(&gemac->pdev->dev), gemac);
 	if (ret < 0) {
-		dev_err(&gemac->pdev->dev, "error attaching irq (%d)\n", ret);
-		goto err_request;
+		dev_err(&gemac->pdev->dev, "error attaching rx irq (%d)\n", ret);
+		goto err_request_rx_int;
+	}
+
+	ret = devm_request_irq(&gemac->pdev->dev, gemac->dt_irq_tx, tx_interrupt,
+			       0, dev_name(&gemac->pdev->dev), gemac);
+	if (ret < 0) {
+		dev_err(&gemac->pdev->dev, "error attaching tx irq (%d)\n", ret);
+		goto err_request_tx_int;
 	}
 
 	napi_enable(&gemac->rx_ring.napi);
@@ -87,7 +94,8 @@ static int bb_gemac_open(struct net_device *ndev)
 
 	return 0;
 
-err_request:
+err_request_rx_int:
+err_request_tx_int:
 	return -1;
 }
 
@@ -149,18 +157,6 @@ static int bb_mac_init(struct gemac_private *gemac)
 	/* Reset MAC */
 	__raw_writel(1, &gemac->eth_switch.regs->soft_reset);
 
-	/* Enable ALE */
-	reg = readl(&gemac->ale.regs->control);
-	reg |= BIT(31);
-	reg |= BIT(30);
-//	reg |= BIT(4); //?
-	reg &= ~BIT(2);
-	__raw_writel(reg, &gemac->ale.regs->control);
-
-	/* Enable ALE forwarding on all ports */
-	for (i = 0; i < 5; ++i)
-		writel(3, &gemac->ale.regs->portctl[i]);
-
 	/* Set up priority mapping */
 	__raw_writel(0, &gemac->port1.regs->rx_dscp_pri_map[0]);
 
@@ -182,14 +178,23 @@ static int bb_mac_init(struct gemac_private *gemac)
 	__raw_writel(mac_control, &gemac->sliver_port1.regs->mac_control);
 
 	/* Setup MAC */
+//	__raw_writel(BB_GET_MAC_HI(gemac->dt_mac), &gemac->port0.regs->mac_hi);
+//	__raw_writel(BB_GET_MAC_LO(gemac->dt_mac), &gemac->port0.regs->mac_lo);
 	__raw_writel(BB_GET_MAC_HI(gemac->dt_mac), &gemac->port1.regs->mac_hi);
 	__raw_writel(BB_GET_MAC_LO(gemac->dt_mac), &gemac->port1.regs->mac_lo);
+//	__raw_writel(BB_GET_MAC_HI(gemac->dt_mac), &gemac->port2.regs->mac_hi);
+//	__raw_writel(BB_GET_MAC_LO(gemac->dt_mac), &gemac->port2.regs->mac_lo);
 
 	__raw_writel(0x76543210, &gemac->sliver_port1.regs->rx_pri_map);
+	__raw_writel(0x76543210, &gemac->sliver_port2.regs->rx_pri_map);
 	__raw_writel(0x33221100, &gemac->port1.regs->tx_pri_map);
-//	__raw_writel(0x00000000, &gemac->port1.regs->tx_pri_map);
+	__raw_writel(0x33221100, &gemac->port2.regs->tx_pri_map);
+//	__raw_writel(0x33221100, &gemac->port0.regs->tx_pri_map);
+	__raw_writel(1 << 15 | 1 << 5 | 1, &gemac->sliver_port1.regs->mac_control);
 
-	__raw_writel(0x7, &gemac->eth_switch.regs->flow_control);//?
+	__raw_writel(0, &gemac->eth_switch.regs->ptype);
+
+//	__raw_writel(0x7, &gemac->eth_switch.regs->flow_control);//?
 //	__raw_writel((3 << 4) || (3), &gemac->port1.regs->max_blks);
 //	__raw_writel(0x33, &gemac->port0.regs->max_blks);
 //	__raw_writel(0x33, &gemac->port1.regs->max_blks);
@@ -199,7 +204,7 @@ static int bb_mac_init(struct gemac_private *gemac)
 	pr_err("port2 max_blks: %08x\n", readl(&gemac->port2.regs->max_blks));
 
 	/* Max len */
-	__raw_writel(1500, &gemac->sliver_port1.regs->rx_maxlen);
+	__raw_writel(BB_DMA_BUF_DEFAULT_SIZE, &gemac->sliver_port1.regs->rx_maxlen);
 
 	DBG("<--%s\n", __FUNCTION__);
 
@@ -235,15 +240,8 @@ static int bb_gemac_get_resources(struct gemac_private *pdata)
 	dt = of_get_mac_address(pdev->dev.of_node);
 	if (dt)
 		memcpy(pdata->dt_mac, dt, ETH_ALEN);
-	else {
-//		pdata->dt_mac[0] = 0xAB;
-//		pdata->dt_mac[1] = 0xBC;
-//		pdata->dt_mac[2] = 0xCD;
-//		pdata->dt_mac[3] = 0xDE;
-//		pdata->dt_mac[4] = 0xEF;
-//		pdata->dt_mac[5] = 0xFF;
+	else
 		memset(pdata->dt_mac, 0, ETH_ALEN);
-	}
 
 	/* Interrupts. 0-rx_thresh, 1-rx, 2-tx, 3-misc */
 	pdata->dt_irq_rx = platform_get_irq(pdev, 1);
@@ -340,7 +338,12 @@ static int bb_gemac_apply_resources(struct gemac_private *pdata)
 		eth_hw_addr_random(pdata->ndev);
 		memcpy(pdata->dt_mac, pdata->ndev->dev_addr, ETH_ALEN);
 	}
-	DBG("Random MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", pdata->dt_mac[0], pdata->dt_mac[1], pdata->dt_mac[2], pdata->dt_mac[3], pdata->dt_mac[4], pdata->dt_mac[5]);
+	DBG("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", pdata->dt_mac[0],
+						    pdata->dt_mac[1],
+						    pdata->dt_mac[2],
+						    pdata->dt_mac[3],
+						    pdata->dt_mac[4],
+						    pdata->dt_mac[5]);
 
 	DBG("<--%s\n", __FUNCTION__);
 

@@ -21,14 +21,16 @@
 #define CPDMA_DESC_CRC_LEN	4
 
 #define CPDMA_EOI_RX		1
+#define CPDMA_EOI_TX		2
 #define CPDMA_MAX_CHAN		8
 #define CPDMA_PKT_MAX_LEN	0x7FF
 
 /* Helper macros */
-#define NEXT_DESC(cur_desc)	((cur_desc + 1) % 512)
+#define NEXT_DESC(cur_desc)	((cur_desc + 1) & (BB_DMA_RING_DEFAULT_SIZE - 1))
 #define MTU_TO_FRAME_SIZE(x) ((x) + VLAN_ETH_HLEN)
 #define MTU_TO_BUF_SIZE(x) (MTU_TO_FRAME_SIZE(x) + NET_IP_ALIGN + 4)
 #define ALE_TABLE_WRITE		BIT(31)
+
 
 /**
  * GEMAC NAPI rx polling method
@@ -41,6 +43,7 @@ int poll_rx(struct napi_struct *napi, int weight);
 int poll_tx(struct napi_struct *napi, int weight);
 
 irqreturn_t rx_interrupt(int irq, void *dev_id);
+irqreturn_t tx_interrupt(int irq, void *dev_id);
 void bb_enable_interrupts(struct gemac_private *gemac);
 int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring,
 		   int alloc_buffers);

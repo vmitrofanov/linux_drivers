@@ -39,6 +39,9 @@
 #define ALE_TABLE_CONTROL	0x20
 #define ALE_TABLE		0x34
 
+
+#define ALE_PCTRL0		0x40
+
 int bb_ale_init(struct gemac_private *gemac);
 int bb_ale_add_mcast(struct gemac_private *gemac, const u8 *addr, int port_mask);
 

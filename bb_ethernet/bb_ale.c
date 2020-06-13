@@ -199,32 +199,96 @@ int bb_ale_add_mcast(struct gemac_private *gemac, const u8 *addr,
         return 0;
 }
 
+static int cpsw_ale_add_ucast(struct gemac_private *priv, const u8 *addr,
+                              int port, int flags)
+{
+        u32 ale_entry[ALE_ENTRY_WORDS] = {0, 0, 0};
+        int idx;
+
+        cpsw_ale_set_entry_type(ale_entry, ALE_TYPE_ADDR);
+        cpsw_ale_set_addr(ale_entry, addr);
+        cpsw_ale_set_ucast_type(ale_entry, ALE_UCAST_PERSISTANT);
+        cpsw_ale_set_secure(ale_entry, (flags & ALE_SECURE) ? 1 : 0);
+        cpsw_ale_set_blocked(ale_entry, (flags & ALE_BLOCKED) ? 1 : 0);
+        cpsw_ale_set_port_num(ale_entry, port, 0xFFFFFFFF);
+
+        idx = cpsw_ale_match_addr(priv, addr);
+        if (idx < 0)
+                idx = cpsw_ale_match_free(priv);
+        if (idx < 0)
+                idx = cpsw_ale_find_ageable(priv);
+        if (idx < 0)
+                return -ENOMEM;
+
+        cpsw_ale_write(priv, idx, ale_entry);
+        return 0;
+}
+
+
+static void
+cpsw_ale_write_entry(struct gemac_private *gemac, uint16_t idx, uint32_t *ale_entry)
+{
+//	cpsw_write_4(sc, CPSW_ALE_TBLW0, ale_entry[0]);
+//	cpsw_write_4(sc, CPSW_ALE_TBLW1, ale_entry[1]);
+//	cpsw_write_4(sc, CPSW_ALE_TBLW2, ale_entry[2]);
+//	cpsw_write_4(sc, CPSW_ALE_TBLCTL, 1 << 31 | (idx & 1023));
+
+	writel(ale_entry[0], &gemac->ale.regs->tblw0);
+	writel(ale_entry[1], &gemac->ale.regs->tblw1);
+	writel(ale_entry[2], &gemac->ale.regs->tblw2);
+	writel(1 << 31 | (idx & 1023), &gemac->ale.regs->tblctl);
+}
+
 int bb_ale_init(struct gemac_private *gemac)
 {
 	int result = 0;
 	int i;
 	u32 reg;
+	uint32_t ale_entry[3];
 
 	/* Enable ALE */
 	reg = readl(&gemac->ale.regs->control);
 	reg |= BIT(31);
 	reg |= BIT(30);
-//	reg |= BIT(4); //?
-	reg &= ~BIT(2);
+	reg |= BIT(4);
+//	reg |= BIT(1);
+//	reg &= ~BIT(2);
 	__raw_writel(reg, &gemac->ale.regs->control);
 
+	reg = readl(&gemac->ale.regs->control);
+	DBG("REG: ALE->CTRL: %08x\n", reg);
+
 	/* Enable ALE forwarding on all ports */
-	for (i = 0; i < 5; ++i)
+	for (i = 0; i < 6; ++i)
 		writel(3, &gemac->ale.regs->portctl[i]);
 
-	//todo: move form this place
-	/*
-	 * TODO: the driver has to use multicast setting on ale, because no multicast packets go to out and isn't visible after ALE.
-	 * Now driver can ping and been pinged if arp protocol is set on bouth machines.
-	 */
-	//	bb_ale_add_mcast(gemac, gemac->dt_mac, 7, 0, 0, 0);
-	result |= bb_ale_add_mcast(gemac, net_bcast_ethaddr, 1);
-	result |= bb_ale_add_mcast(gemac, net_bcast_ethaddr, 1 << 1);
+	/* Setup link address at table entry 0 */
+//	mac = LLADDR((struct sockaddr_dl *)ifp->if_addr->ifa_addr);
+//	ale_entry[0] = mac[2] << 24 | mac[3] << 16 | mac[4] << 8 | mac[5];
+//	ale_entry[1] = 0x10 << 24 | mac[0] << 8 | mac[1]; /* addr entry + mac */
+//	ale_entry[2] = 0; /* port = 0 */
+//	cpsw_ale_write_entry(sc, 0, ale_entry);
+//
+//	/* Set outgoing MAC Address for Ports 1 and 2. */
+//	for (i = 1; i < 3; ++i) {
+//		cpsw_write_4(sc, CPSW_PORT_P_SA_HI(i),
+//		    mac[3] << 24 | mac[2] << 16 | mac[1] << 8 | mac[0]);
+//		cpsw_write_4(sc, CPSW_PORT_P_SA_LO(i),
+//		    mac[5] << 8 | mac[4]);
+//	}
+//        if_addr_runlock(ifp);
+
+	ale_entry[0] = gemac->dt_mac[2] << 24 | gemac->dt_mac[3] << 16 | gemac->dt_mac[4] << 8 | gemac->dt_mac[5];
+	ale_entry[1] = 0x10 << 24 | gemac->dt_mac[0] << 8 | gemac->dt_mac[1]; /* addr entry + mac */
+	ale_entry[2] = 0; /* port = 0 */
+	cpsw_ale_write_entry(gemac, 0, ale_entry);
+
+
+	/* Keep the broadcast address at table entry 1. */
+	ale_entry[0] = 0xffffffff; /* Lower 32 bits of MAC */
+	ale_entry[1] = 0xd000ffff; /* FW (3 << 30), Addr entry (1 << 24), upper 16 bits of Mac */
+	ale_entry[2] = 0x0000001c; /* Forward to all ports */
+	cpsw_ale_write_entry(gemac, 1, ale_entry);
 
 	return result;
 }
