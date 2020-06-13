@@ -14,7 +14,7 @@
 #include <linux/phy.h>
 #include "bb_mdio.h"
 
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
 #define DBG(...)	pr_err(__VA_ARGS__)
 #else
@@ -28,6 +28,8 @@
 #define BB_DMA_RING_DEFAULT_SIZE	512
 #define BB_DMA_BUF_DEFAULT_SIZE		1600
 #define BB_DMA_CHANNELS_NUMBER		8
+#define BB_INT_CHAN_MASK		0xFF
+
 
 #define BB_MDIO_OFFSET			0x1000
 #define BB_WR_OFFSET			0x1200

@@ -88,7 +88,8 @@ static int bb_gemac_open(struct net_device *ndev)
 	bb_init_rings(gemac);
 	bb_start_dma_engine(gemac);
 
-	bb_enable_interrupts(gemac);
+	/* Enable just the first interrupt channel */
+	bb_enable_interrupts(gemac, BIT(0));
 
 	DBG("<--%s\n", __FUNCTION__);
 

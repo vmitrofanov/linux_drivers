@@ -44,7 +44,7 @@ int poll_tx(struct napi_struct *napi, int weight);
 
 irqreturn_t rx_interrupt(int irq, void *dev_id);
 irqreturn_t tx_interrupt(int irq, void *dev_id);
-void bb_enable_interrupts(struct gemac_private *gemac);
+void bb_enable_interrupts(struct gemac_private *gemac, int channels_mask);
 int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring,
 		   int alloc_buffers);
 int bb_init_rings(struct gemac_private *gemac);
