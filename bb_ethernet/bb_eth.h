@@ -300,7 +300,7 @@ struct gemac_private
 	struct bb_wr eth_wr;
 
 	/* DT resources */
-	struct resource *dt_gemac_registers;
+	struct resource *dt_gemac_regs;
 	struct device_node *dt_phy_node;
 	struct clk *dt_clk;
 	char dt_mac[ETH_ALEN];

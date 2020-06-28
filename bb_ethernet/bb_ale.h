@@ -42,7 +42,7 @@
 
 #define ALE_PCTRL0		0x40
 
-int bb_ale_init(struct gemac_private *gemac);
+void bb_ale_init(struct gemac_private *gemac);
 int bb_ale_add_mcast(struct gemac_private *gemac, const u8 *addr, int port_mask);
 
 #endif

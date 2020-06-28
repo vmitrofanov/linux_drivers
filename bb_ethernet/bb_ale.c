@@ -239,9 +239,8 @@ cpsw_ale_write_entry(struct gemac_private *gemac, uint16_t idx, uint32_t *ale_en
 	writel(1 << 31 | (idx & 1023), &gemac->ale.regs->tblctl);
 }
 
-int bb_ale_init(struct gemac_private *gemac)
+void bb_ale_init(struct gemac_private *gemac)
 {
-	int result = 0;
 	int i;
 	u32 reg;
 	uint32_t ale_entry[3];
@@ -289,6 +288,4 @@ int bb_ale_init(struct gemac_private *gemac)
 	ale_entry[1] = 0xd000ffff; /* FW (3 << 30), Addr entry (1 << 24), upper 16 bits of Mac */
 	ale_entry[2] = 0x0000001c; /* Forward to all ports */
 	cpsw_ale_write_entry(gemac, 1, ale_entry);
-
-	return result;
 }
