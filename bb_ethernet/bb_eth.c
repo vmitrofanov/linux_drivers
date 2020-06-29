@@ -241,37 +241,29 @@ static int bb_gemac_get_resources(struct gemac_private *pdata)
 
 	pdata->dt_irq_tx = platform_get_irq(pdev, 2);
 	if (pdata->dt_irq_tx < 0)
-		return -3;
-
-	/* GEMAC clock */
-//	pdata->dt_clk = devm_clk_get(&pdev->dev, BB_GEMAC_CLK);
-//	if (IS_ERR(pdata->dt_clk))
-//		return -4;
-
-	/* MDIO */
-	pdata->mdio.parent = &pdev->dev;
-	pdata->mdio.clk = devm_clk_get(&pdev->dev, BB_GEMAC_CLK);
-	if (IS_ERR(pdata->mdio.clk))
 		return -4;
 
-	//TODO: get child by name because of many child are possible
-	pdata->mdio.node = of_get_next_available_child(pdev->dev.of_node, NULL);
-	if (of_property_read_u32(pdata->mdio.node, "bus_freq", &pdata->mdio.bus_freq) < 0) {
-		pr_err("Missing bus_freq property in the DT.\n");
-		return -5;
-	}
+	pdata->dt_clk = devm_clk_get(&pdev->dev, BB_GEMAC_CLK);
 
-	//TODO: un comment and replace
-//	pdata->dt_phy_interface = of_get_phy_mode(pdata->mdio.node);
-	pdata->dt_phy_interface = PHY_INTERFACE_MODE_RMII;
-	if (pdata->dt_phy_interface < 0) {
-		pr_err("Invalid PHY interface\n");
+	pdata->mdio.parent = &pdev->dev;
+	/* Common clock resource for GEMAC and MDIO */
+	pdata->mdio.clk = pdata->dt_clk;
+	if (IS_ERR(pdata->mdio.clk))
+		return -5;
+
+	pdata->mdio.node = of_get_child_by_name(pdev->dev.of_node,
+						BB_MDIO_NAME);
+	if (of_property_read_u32(pdata->mdio.node, "bus_freq",
+			         &pdata->mdio.bus_freq) < 0) {
+		pr_err("Missing bus_freq property in the DT.\n");
 		return -6;
 	}
-	/* PHY */
-//	pdata->dt_phy_node = of_parse_phandle(pdev->dev.of_node, "phy-handle", 0);
-//	if (!pdata->dt_phy_node)
-//		return -5;
+
+	pdata->dt_phy_interface = of_get_phy_mode(pdata->mdio.node);
+	if (pdata->dt_phy_interface < 0) {
+		pr_err("Invalid PHY interface\n");
+		return -7;
+	}
 
 	DBG("<--%s\n", __FUNCTION__);
 
@@ -435,17 +427,10 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	bb_ale_init(pdata);
 
 	/* Setup NAPI */
-	netif_napi_add(pdata->ndev, &pdata->rx_ring.napi, poll_rx, NAPI_POLL_WEIGHT);
-	netif_tx_napi_add(pdata->ndev, &pdata->tx_ring.napi, poll_tx, NAPI_POLL_WEIGHT);
-
-	/* Initialize locks */
-	//TODO:
-
-	/* Initialize service works */
-	//TODO:
-
-	/* Setup ethtool callback */
-	//TODO:
+	netif_napi_add(pdata->ndev, &pdata->rx_ring.napi, poll_rx,
+		       NAPI_POLL_WEIGHT);
+	netif_tx_napi_add(pdata->ndev, &pdata->tx_ring.napi, poll_tx,
+			  NAPI_POLL_WEIGHT);
 
 	/* Complete registration */
 	result = register_netdev(gemac);

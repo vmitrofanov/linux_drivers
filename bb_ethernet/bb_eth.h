@@ -22,7 +22,8 @@
 #endif
 
 #define BB_GEMAC_CLK			"fck"
-#define BB_MDIO_NAME            	"mdio"
+
+#define BB_MDIO_NAME            	"bb_mdio"
 #define BB_PHY_NAME             	"bb_mdiobus:0:00"
 
 #define BB_DMA_RING_DEFAULT_SIZE	512
