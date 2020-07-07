@@ -619,8 +619,6 @@ void bb_init_tx_rx_rings(struct gemac_private *gemac, int channel)
 	writel(desc[0].desc_dma, &gemac->dma.stream->rx_hdp[channel]);
 
 	DBG("<--%s\n", __FUNCTION__);
-
-	return 0;
 }
 
 /**
