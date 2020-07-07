@@ -22,7 +22,10 @@
 #define PHY_REG_MASK		0x1f
 #define PHY_ID_MASK		0x1f
 
-
+/**
+ * bb_mdio_init_clk() - calculate clock value and initialize MDIO
+ * @data: pointer to MDIO structure
+ */
 static void bb_mdio_init_clk(struct bb_mdio *data)
 {
 	u32 mdio_in;
@@ -60,6 +63,10 @@ static void bb_mdio_init_clk(struct bb_mdio *data)
 	DBG("<--%s\n", __FUNCTION__);
 }
 
+/**
+ * bb_mdio_enable() - just turn on MDIO controller
+ * @data: pointer to MDIO structure
+ */
 static void bb_mdio_enable(struct bb_mdio *data)
 {
 	DBG("-->%s\n", __FUNCTION__);
@@ -70,7 +77,10 @@ static void bb_mdio_enable(struct bb_mdio *data)
 	DBG("<--%s\n", __FUNCTION__);
 }
 
-/* wait until hardware is ready for another user access */
+/**
+ * wait_for_user_access() - wait until hardware is ready for another user access
+ * @data: pointer to MDIO structure
+ */
 static inline int wait_for_user_access(struct bb_mdio *data)
 {
 	struct davinci_mdio_regs __iomem *regs = data->regs;
@@ -106,6 +116,10 @@ static inline int wait_for_user_access(struct bb_mdio *data)
 	return -ETIMEDOUT;
 }
 
+/**
+ * bb_mdio_reset() - reset MDIO devices placed on MDIO bus
+ * @bus: bus containing MDIO devices
+ */
 static int bb_mdio_reset(struct mii_bus *bus)
 {
 	struct bb_mdio *data = bus->priv;
@@ -144,6 +158,12 @@ done:
 	return 0;
 }
 
+/**
+ * bb_mdio_write() - write to an MDIO device
+ * @phy_id: device id
+ * @phy_reg: MDIO register number
+ * @phy_data: data to write
+ */
 static int bb_mdio_write(struct mii_bus *bus, int phy_id,
 			      int phy_reg, u16 phy_data)
 {
@@ -175,6 +195,12 @@ static int bb_mdio_write(struct mii_bus *bus, int phy_id,
 	return ret;
 }
 
+/**
+ * bb_mdio_read() - read from an MDIO device
+ * @phy_id: device id
+ * @phy_reg: MDIO register number
+ * @phy_data: data to write
+ */
 static int bb_mdio_read(struct mii_bus *bus, int phy_id, int phy_reg)
 {
 	struct bb_mdio *data = bus->priv;
@@ -189,16 +215,12 @@ static int bb_mdio_read(struct mii_bus *bus, int phy_id, int phy_reg)
 
 	while (1) {
 		ret = wait_for_user_access(data);
-//		if (ret == -EAGAIN)
-//			continue;
 		if (ret < 0)
 			break;
 
 		__raw_writel(reg, &data->regs->user[0].access);
 
 		ret = wait_for_user_access(data);
-//		if (ret == -EAGAIN)
-//			continue;
 		if (ret < 0)
 			break;
 
@@ -210,6 +232,10 @@ static int bb_mdio_read(struct mii_bus *bus, int phy_id, int phy_reg)
 	return ret;
 }
 
+/**
+ * bb_mdio_destroy() - destroy MDIO controller and all devices in the bus
+ * @mdio: common MDIO structure
+ */
 void bb_mdio_destroy(struct bb_mdio *mdio)
 {
 	DBG("-->%s\n", __FUNCTION__);
@@ -221,6 +247,10 @@ void bb_mdio_destroy(struct bb_mdio *mdio)
 	DBG("<--%s\n", __FUNCTION__);
 }
 
+/**
+ * bb_mdio_create() - create MDIO bus and scan all devices at this bus
+ * @mdio: common MDIO structure
+ */
 int bb_mdio_create(struct bb_mdio *mdio)
 {
 	int result = -1;

@@ -4,6 +4,11 @@
 #include "bb_eth.h"
 
 #ifdef DEBUG
+/**
+ * bb_print_buf() - print an entire packet and its length
+ * @buf: pointer to buffer containing a packet
+ * @len: packet length
+ */
 static void bb_print_buf(void *buf, int len)
 {
 	char print_buf[256];
@@ -93,6 +98,12 @@ netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	return NETDEV_TX_OK;
 }
 
+/**
+ * process_rx_ring() - acquire ingress packets and push it to stack
+ * @rx_ring: ring to process. One of BB_DMA_CHANNELS_NUMBER rings.
+ * @budget: number of packets to process
+ * RETURN: number of processed packets
+ */
 static int process_rx_ring(struct ring *rx_ring, int budget)
 {
 	struct gemac_private *gemac = rx_ring->gemac;
@@ -153,6 +164,11 @@ static int process_rx_ring(struct ring *rx_ring, int budget)
 	return processed;
 }
 
+/**
+ * get_dirty_num() - number of used descriptors in a ring
+ * @gemac: common structure
+ * @ring: ring with descriptors
+ */
 inline int get_dirty_num(struct gemac_private *gemac, struct ring *ring)
 {
 	size_t ring_size = gemac->ring_size;
@@ -162,6 +178,11 @@ inline int get_dirty_num(struct gemac_private *gemac, struct ring *ring)
 	return (cur >= dirty) ? cur - dirty : ring_size - dirty + cur;
 }
 
+/**
+ * refill_rx() - rescue dirty descriptors
+ * @gemac: common structure
+ * @rx_ring: a rescued ring
+ */
 static int refill_rx(struct gemac_private *gemac, struct ring *rx_ring)
 {
 	struct ring *rx = rx_ring;
@@ -201,6 +222,11 @@ static int refill_rx(struct gemac_private *gemac, struct ring *rx_ring)
 	return refilled;
 }
 
+/**
+ * refill_tx() - rescue dirty descriptors
+ * @gemac: common structure
+ * @rx_ring: a rescued ring
+ */
 static int refill_tx(struct gemac_private *gemac, struct ring *tx_ring)
 {
 	struct ring *tx = tx_ring;
@@ -233,6 +259,11 @@ static int refill_tx(struct gemac_private *gemac, struct ring *tx_ring)
 	return refilled;
 }
 
+/**
+ * poll_rx() - RX NAPI poller
+ * @rx_napi: NAPI
+ * @weight: number of packets to process
+ */
 int poll_rx(struct napi_struct *rx_napi, int weight)
 {
 	struct gemac_private *gemac = netdev_priv(rx_napi->dev);
@@ -255,6 +286,11 @@ int poll_rx(struct napi_struct *rx_napi, int weight)
 	return processed;
 }
 
+/**
+ * poll_tx() - TX NAPI poller
+ * @rx_napi: NAPI
+ * @weight: number of packets to refill
+ */
 int poll_tx(struct napi_struct *tx_napi, int weight)
 {
 	struct gemac_private *gemac = netdev_priv(tx_napi->dev);
@@ -274,6 +310,11 @@ int poll_tx(struct napi_struct *tx_napi, int weight)
 	return refilled;
 }
 
+/**
+ * rx_interrupt() - RX interrupt handler
+ * @irq: irq number
+ * @dev_id: pointer holding struct gemac_private
+ */
 irqreturn_t rx_interrupt(int irq, void *dev_id)
 {
 	struct gemac_private *gemac = dev_id;
@@ -294,7 +335,9 @@ irqreturn_t rx_interrupt(int irq, void *dev_id)
 }
 
 /**
- *
+ * tx_interrupt() - TX interrupt handler
+ * @irq: irq number
+ * @dev_id: pointer holding struct gemac_private
  */
 irqreturn_t tx_interrupt(int irq, void *dev_id)
 {
@@ -316,7 +359,9 @@ irqreturn_t tx_interrupt(int irq, void *dev_id)
 }
 
 /**
- *
+ * bb_disable_interrupts() - disable interrupts from 1 to chan_num
+ * @gemac: common structure
+ * @chan_num: highest disabled interrupt
  */
 void bb_disable_interrupts(struct gemac_private *gemac, int chan_num)
 {
@@ -350,7 +395,9 @@ void bb_disable_interrupts(struct gemac_private *gemac, int chan_num)
 }
 
 /**
- * NOTE: nested function!
+ * bb_enable_interrupts() - enable interrupts from 1 to chan_num
+ * @gemac: common structure
+ * @chan_num: highest enabled interrupt
  */
 void bb_enable_interrupts(struct gemac_private *gemac, int chan_num)
 {
@@ -384,6 +431,12 @@ void bb_enable_interrupts(struct gemac_private *gemac, int chan_num)
 	enable_irq(gemac->dt_irq_rx);
 }
 
+/**
+ * bb_free_ring() - free allocated ring resources
+ * @gemac: common structure
+ * @ring: pointer to a ring
+ * @is_rx: set up this flag in case of RX ring
+ */
 void bb_free_ring(struct gemac_private *gemac, struct ring *ring, bool is_rx)
 {
 	int i;
@@ -414,6 +467,12 @@ void bb_free_ring(struct gemac_private *gemac, struct ring *ring, bool is_rx)
 	}
 }
 
+/**
+ * bb_alloc_ring() - allocate ring resources
+ * @gemac - common structure
+ * @ring - pointer to a ring
+ * @is_rx: set up this flag in case of RX ring
+ */
 int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring, bool is_rx)
 {
 	struct ring *r = ring;
@@ -499,6 +558,11 @@ err_alloc_coherent:
 	return -1;
 }
 
+/**
+ * bb_gemac_reset() - reset whole module
+ * @gemac: common structure
+ * RETURN: 0 - OK	-1 - ERROR
+ */
 int bb_gemac_reset(struct gemac_private *gemac)
 {
 	int timeout_cnt = 50;
@@ -513,7 +577,14 @@ int bb_gemac_reset(struct gemac_private *gemac)
 	return 0;
 }
 
-int bb_init_tx_rx_rings(struct gemac_private *gemac, int channel)
+/**
+ * bb_init_tx_rx_rings() - initialize RX and TX rings for a particular channel
+ * @gemac: common structure
+ * @channel: number that describe RX and TX rings
+ * Description: this function reset and setup resources for already
+ * allocated rings
+ */
+void bb_init_tx_rx_rings(struct gemac_private *gemac, int channel)
 {
 	struct ring *ring;
 	struct dma_desc *desc;
@@ -552,12 +623,20 @@ int bb_init_tx_rx_rings(struct gemac_private *gemac, int channel)
 	return 0;
 }
 
+/**
+ * bb_start_dma_engine() - run DMA engine
+ * @gemac: common structure
+ */
 void bb_start_dma_engine(struct gemac_private *gemac)
 {
 	__raw_writel(1, &gemac->dma.regs->rx_control);
 	__raw_writel(1, &gemac->dma.regs->tx_control);
 }
 
+/**
+ * bb_stop_dma_engine() - turn off DMA engine
+ * @gemac: common structure
+ */
 void bb_stop_dma_engine(struct gemac_private *gemac)
 {
 	__raw_writel(0, &gemac->dma.regs->rx_control);

@@ -169,6 +169,8 @@ static int bb_gemac_stop(struct net_device *ndev)
 /**
  * bb_mac_init() - initialize MAC (SS and WR) with applied resources
  * @gemac: store HW callbacks and parameters to setup
+ * Description: initialize MAC with appropriate values, set up max packet
+ * 		length, channel priorities, enable statistics
  */
 static void bb_mac_init(struct gemac_private *gemac)
 {
@@ -348,6 +350,10 @@ static const struct net_device_ops gemac_net_ops = {
 		.ndo_start_xmit = bb_gemac_start_xmit,
 };
 
+/**
+ * bb_setup_driver_settings() - setup resources gotten from loaded parameters
+ * @gemac: common structure
+ */
 static void bb_setup_driver_settings(struct gemac_private *gemac)
 {
 	/* Read from global variables which are set as default or as params */
@@ -459,7 +465,6 @@ err_get_resources:
 /**
  * bb_gemac_remove() - Remove bb ethernet device
  * @bb_gemac_dev: platform device
- *
  * RETURN: 0 - OK
  */
 static int bb_gemac_remove(struct platform_device *bb_gemac_dev)

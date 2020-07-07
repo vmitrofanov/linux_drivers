@@ -61,7 +61,7 @@ void bb_enable_interrupts(struct gemac_private *gemac, int chan_num);
 void bb_disable_interrupts(struct gemac_private *gemac, int chan_num);
 int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring, bool is_rx);
 void bb_free_ring(struct gemac_private *gemac, struct ring *ring, bool is_rx);
-int bb_init_tx_rx_rings(struct gemac_private *gemac, int channel);
+void bb_init_tx_rx_rings(struct gemac_private *gemac, int channel);
 int bb_gemac_reset(struct gemac_private *gemac);
 void bb_start_dma_engine(struct gemac_private *gemac);
 void bb_stop_dma_engine(struct gemac_private *gemac);

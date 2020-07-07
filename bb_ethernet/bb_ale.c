@@ -1,5 +1,11 @@
 #include "bb_ale.h"
 
+/**
+ * cpsw_ale_write_entry() - write ethernet address entry to ALE table
+ * @gemac: common structure
+ * @idx: index in an ALE table
+ * @ale_entry: pointer to an entry containing information we would like to write
+ */
 static void cpsw_ale_write_entry(struct gemac_private *gemac, uint16_t idx,
 				 uint32_t *ale_entry)
 {
@@ -9,6 +15,11 @@ static void cpsw_ale_write_entry(struct gemac_private *gemac, uint16_t idx,
 	writel(1 << 31 | (idx & 1023), &gemac->ale.regs->tblctl);
 }
 
+/**
+ * bb_ale_init() - initialize Address Lookup Engine
+ * @gemac: common structure
+ * Description: Turn on ALE, allow broadcast frames
+ */
 void bb_ale_init(struct gemac_private *gemac)
 {
 	int i;
