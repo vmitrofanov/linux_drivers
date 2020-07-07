@@ -36,7 +36,8 @@ static void bb_print_buf(void *buf, int len)
 netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct gemac_private *gemac = netdev_priv(ndev);
-	struct ring *tx_ring = &gemac->tx_ring;
+	u32 queue = skb_get_queue_mapping(skb);
+	struct ring *tx_ring = &gemac->tx_ring[queue];
 	struct dma_desc *sw_desc;
 	struct hw_desc *hw_desc;
 	struct netdev_queue *txq;
@@ -67,21 +68,17 @@ netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	wmb();
 
 	/* Start transmission */
-	writel(sw_desc->desc_dma, &gemac->dma.stream->tx_hdp[0]);
+	writel(sw_desc->desc_dma, &gemac->dma.stream->tx_hdp[queue]);
 
 	/* Wait until stop transmitting */
-	while ((readl(&gemac->dma.stream->tx_hdp[0]) != 0) && --timeout_cls) {
-		;
-	}
+	while ((readl(&gemac->dma.stream->tx_hdp[queue]) != 0) && --timeout_cls)
+		continue;
+
 	if (!timeout_cls)
 		pr_err("-->%s: xmit descriptor timeout\n", __FUNCTION__);
 
 	/* Notify GEMAC about last sending descriptor to clear interrupt */
-	writel(sw_desc->desc_dma, &gemac->dma.stream->tx_cp[0]);
-
-	DBG("TX(%d)   circles: %d   d0:d1:d2:d3 = %08x:%08x:%08x:%08x\n",
-		tx_ring->cur, circles, hw_desc->next, hw_desc->buf,
-		hw_desc->len, hw_desc->opt);
+	writel(sw_desc->desc_dma, &gemac->dma.stream->tx_cp[queue]);
 
 	/* Print if debug enabled */
 	bb_print_buf(skb->data, skb->len);
@@ -91,16 +88,14 @@ netdev_tx_t bb_gemac_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 	tx_ring->cur = NEXT_DESC(tx_ring->cur);
 
-//	DBG("<--%s\n", __FUNCTION__);
+	DBG("<--%s\n", __FUNCTION__);
 
 	return NETDEV_TX_OK;
 }
 
 static int process_rx_ring(struct ring *rx_ring, int budget)
 {
-	struct gemac_private *gemac = container_of(rx_ring,
-						   struct gemac_private,
-						   rx_ring);
+	struct gemac_private *gemac = rx_ring->gemac;
 	struct hw_desc *hw_desc;
 	struct dma_desc *desc = rx_ring->desc_ring + rx_ring->cur;
 	struct sk_buff *skb;
@@ -141,19 +136,10 @@ static int process_rx_ring(struct ring *rx_ring, int budget)
 		gemac->ndev->stats.rx_packets++;
 		gemac->ndev->stats.rx_bytes += desc->buf_size;
 
-#if 0
-		skb_checksum_none_assert(skb);
-		skb->dev = gemac->ndev;
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
-#endif
-
 		if (NET_RX_SUCCESS != netif_receive_skb(skb))
 			DBG("packet dropped by stack\n");
 
-		DBG("RX(%d): d0:d1:d2:d3 = %08x:%08x:%08x:%08x\n",
-		       rx_ring->cur, hw_desc->next, hw_desc->buf, hw_desc->len,
-		       hw_desc->opt);
-//		bb_print_buf(buf/*skb->data*/, desc->buf_size);
+		bb_print_buf(buf, desc->buf_size);
 
 		/* Try to clear interrupt */
 		writel(desc->desc_dma, &gemac->dma.stream->rx_cp[0]);
@@ -176,9 +162,9 @@ inline int get_dirty_num(struct gemac_private *gemac, struct ring *ring)
 	return (cur >= dirty) ? cur - dirty : ring_size - dirty + cur;
 }
 
-int refill_rx(struct gemac_private *gemac)
+static int refill_rx(struct gemac_private *gemac, struct ring *rx_ring)
 {
-	struct ring *rx = &gemac->rx_ring;
+	struct ring *rx = rx_ring;
 	struct dma_desc *sw_desc;
 	struct hw_desc *hw_desc;
 	int dirty_num = get_dirty_num(gemac, rx);
@@ -189,9 +175,6 @@ int refill_rx(struct gemac_private *gemac)
 		++refilled;
 		sw_desc = rx->desc_ring + rx->dirty;
 		hw_desc = (struct hw_desc *)sw_desc->desc_cpu;
-
-		//todo: has it to be here or not
-//		dev_kfree_skb_any(sw_desc->skb);
 
 		dma_sync_single_for_device(&gemac->pdev->dev,
 					   sw_desc->buf_dma,
@@ -218,9 +201,9 @@ int refill_rx(struct gemac_private *gemac)
 	return refilled;
 }
 
-int refill_tx(struct gemac_private *gemac)
+static int refill_tx(struct gemac_private *gemac, struct ring *tx_ring)
 {
-	struct ring *tx = &gemac->tx_ring;
+	struct ring *tx = tx_ring;
 	struct dma_desc *sw_desc;
 	struct hw_desc *hw_desc;
 	int dirty_num = get_dirty_num(gemac, tx);
@@ -254,30 +237,18 @@ int poll_rx(struct napi_struct *rx_napi, int weight)
 {
 	struct gemac_private *gemac = netdev_priv(rx_napi->dev);
 	struct ring *rx_ring = container_of(rx_napi, struct ring, napi);
-	int active_channels_mask = readl(&gemac->eth_wr.regs->c0_rx_stat);
 	int processed = 0;
-	int i;
 
 	DBG("%-->s\n", __FUNCTION__);
 
-	for (i = 0; i < CPDMA_MAX_CHAN; ++i) {
-		//TODO: implement rx_ring as main pointer for the structure
-		rx_ring = rx_ring + i;
-		/* If channel has incoming packets */
-		if ((active_channels_mask >> i) & 0x1)
-			processed = process_rx_ring(rx_ring, weight);
-
-		/* It's enough for this napi */
-		if (likely(processed >= weight))
-			break;
-	}
+	processed = process_rx_ring(rx_ring, weight);
 
 	if ((processed < weight) && napi_complete_done(rx_napi, processed)) {
 		DBG("%-->s: stop RX NAPI\n", __FUNCTION__);
 		enable_irq(gemac->dt_irq_rx);
 	}
 
-	refill_rx(gemac);
+	refill_rx(gemac, rx_ring);
 
 	DBG("<--%s\n", __FUNCTION__);
 
@@ -287,11 +258,12 @@ int poll_rx(struct napi_struct *rx_napi, int weight)
 int poll_tx(struct napi_struct *tx_napi, int weight)
 {
 	struct gemac_private *gemac = netdev_priv(tx_napi->dev);
+	struct ring *tx_ring = container_of(tx_napi, struct ring, napi);
 	int refilled;
 
 	DBG("%-->s\n", __FUNCTION__);
 
-	refilled = refill_tx(gemac);
+	refilled = refill_tx(gemac, tx_ring);
 	if ((refilled < weight) && napi_complete_done(tx_napi, refilled)) {
 		DBG("%s: stop TX NAPI\n", __FUNCTION__);
 		enable_irq(gemac->dt_irq_tx);
@@ -302,17 +274,19 @@ int poll_tx(struct napi_struct *tx_napi, int weight)
 	return refilled;
 }
 
-/*
- * TODO: rewrite interrupt clearing due to page 2015 (14.3.1.3)
- */
 irqreturn_t rx_interrupt(int irq, void *dev_id)
 {
 	struct gemac_private *gemac = dev_id;
+	int active_channels_mask = readl(&gemac->eth_wr.regs->c0_rx_stat);
+	int i;
 
-	DBG("-->%s \n", __FUNCTION__);
+	DBG("%-->s\n", __FUNCTION__);
 
 	disable_irq_nosync(gemac->dt_irq_rx);
-	napi_schedule_irqoff(&gemac->rx_ring.napi);
+
+	for (i = 0; i < CPDMA_MAX_CHAN; ++i)
+		if ((active_channels_mask >> i) & 0x1)
+			napi_schedule_irqoff(&gemac->rx_ring[i].napi);
 
 	DBG("<--%s\n", __FUNCTION__);
 
@@ -325,11 +299,16 @@ irqreturn_t rx_interrupt(int irq, void *dev_id)
 irqreturn_t tx_interrupt(int irq, void *dev_id)
 {
 	struct gemac_private *gemac = dev_id;
+	int active_channels_mask = readl(&gemac->eth_wr.regs->c0_tx_stat);
+	int i;
 
 	DBG("-->%s \n", __FUNCTION__);
 
 	disable_irq_nosync(gemac->dt_irq_tx);
-	napi_schedule_irqoff(&gemac->tx_ring.napi);
+
+	for (i = 0; i < CPDMA_MAX_CHAN; ++i)
+		if ((active_channels_mask >> i) & 0x1)
+			napi_schedule_irqoff(&gemac->tx_ring[i].napi);
 
 	DBG("<--%s\n", __FUNCTION__);
 
@@ -339,26 +318,31 @@ irqreturn_t tx_interrupt(int irq, void *dev_id)
 /**
  *
  */
-void bb_disable_interrupts(struct gemac_private *gemac, int channels_mask)
+void bb_disable_interrupts(struct gemac_private *gemac, int chan_num)
 {
 	u32 reg;
+	u32 channel_mask = 0;
+	int i;
+
+	for (i = 0; i < chan_num; ++i)
+		channel_mask |= 1UL << i;
 
 	/* Disable pacing interrupts */
 	reg = readl(&gemac->eth_wr.regs->c0_tx_en);
-	reg &= ~(channels_mask & BB_INT_CHAN_MASK);
+	reg &= ~(channel_mask & BB_INT_CHAN_MASK);
 	writel(reg, &gemac->eth_wr.regs->c0_tx_en);
 
 	reg = readl(&gemac->eth_wr.regs->c0_rx_en);
-	reg &= ~(channels_mask & BB_INT_CHAN_MASK);
-	writel(channels_mask & BB_INT_CHAN_MASK, &gemac->eth_wr.regs->c0_rx_en);
+	reg &= ~(channel_mask & BB_INT_CHAN_MASK);
+	writel(channel_mask & BB_INT_CHAN_MASK, &gemac->eth_wr.regs->c0_rx_en);
 
 	/* mask interrupts channels */
 	reg = readl(&gemac->dma.regs->tx_intmask_clear);
-	reg |= channels_mask & BB_INT_CHAN_MASK;
+	reg |= channel_mask & BB_INT_CHAN_MASK;
 	writel(reg, &gemac->dma.regs->tx_intmask_clear);
 
 	reg = readl(&gemac->dma.regs->rx_intmask_clear);
-	reg |= channels_mask & BB_INT_CHAN_MASK;
+	reg |= channel_mask & BB_INT_CHAN_MASK;
 	writel(reg, &gemac->dma.regs->rx_intmask_clear);
 
 	disable_irq(gemac->dt_irq_tx);
@@ -366,35 +350,71 @@ void bb_disable_interrupts(struct gemac_private *gemac, int channels_mask)
 }
 
 /**
- *
+ * NOTE: nested function!
  */
-void bb_enable_interrupts(struct gemac_private *gemac, int channels_mask)
+void bb_enable_interrupts(struct gemac_private *gemac, int chan_num)
 {
 	u32 reg;
+	u32 channel_mask = 0;
+	int i;
+
+	for (i = 0; i < chan_num; ++i)
+		channel_mask |= 1UL << i;
 
 	/* Enable pacing interrupts */
 	reg = readl(&gemac->eth_wr.regs->c0_tx_en);
-	reg |= channels_mask & BB_INT_CHAN_MASK;
+	reg |= channel_mask & BB_INT_CHAN_MASK;
 	writel(reg, &gemac->eth_wr.regs->c0_tx_en);
 
 	reg = readl(&gemac->eth_wr.regs->c0_rx_en);
-	reg |= channels_mask & BB_INT_CHAN_MASK;
-	writel(channels_mask & BB_INT_CHAN_MASK, &gemac->eth_wr.regs->c0_rx_en);
+	reg |= channel_mask & BB_INT_CHAN_MASK;
+	writel(channel_mask & BB_INT_CHAN_MASK, &gemac->eth_wr.regs->c0_rx_en);
 
 	/* Unmask interrupts channels */
 	reg = readl(&gemac->dma.regs->tx_intmask_set);
-	reg |= channels_mask & BB_INT_CHAN_MASK;
+	reg |= channel_mask & BB_INT_CHAN_MASK;
 	writel(reg, &gemac->dma.regs->tx_intmask_set);
 
 	reg = readl(&gemac->dma.regs->rx_intmask_set);
-	reg |= channels_mask & BB_INT_CHAN_MASK;
+	reg |= channel_mask & BB_INT_CHAN_MASK;
 	writel(reg, &gemac->dma.regs->rx_intmask_set);
 
+	/* User, pay attention nested function */
 	enable_irq(gemac->dt_irq_tx);
 	enable_irq(gemac->dt_irq_rx);
 }
 
-int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring, int alloc_buffers)
+void bb_free_ring(struct gemac_private *gemac, struct ring *ring, bool is_rx)
+{
+	int i;
+
+	if (is_rx) {
+		for (i = 0; i < gemac->ring_size; ++i) {
+			/* Release Rx ring resources */
+			dma_unmap_single(&gemac->pdev->dev,
+					 ring->desc_ring[i].buf_dma,
+					 ring->desc_ring[i].buf_size,
+					 DMA_TO_DEVICE);
+
+			kfree(ring->desc_ring[i].buf_cpu);
+
+			dma_free_coherent(&gemac->pdev->dev,
+					  sizeof(struct hw_desc),
+					  ring->desc_ring[i].desc_cpu,
+					  ring->desc_ring[i].desc_dma);
+		}
+	} else {
+		for (i = 0; i < gemac->ring_size; ++i) {
+			/* Release Tx ring resources */
+			dma_free_coherent(&gemac->pdev->dev,
+					  sizeof(struct hw_desc),
+					  ring->desc_ring[i].desc_cpu,
+					  ring->desc_ring[i].desc_dma);
+		}
+	}
+}
+
+int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring, bool is_rx)
 {
 	struct ring *r = ring;
 	struct dma_desc *desc;
@@ -420,7 +440,7 @@ int bb_alloc_ring(struct gemac_private *gemac, struct ring *ring, int alloc_buff
 		}
 	}
 
-	if (!alloc_buffers)
+	if (!is_rx)
 		return 0;
 
 	/* Allocate memory for descriptor buffer */
@@ -479,17 +499,10 @@ err_alloc_coherent:
 	return -1;
 }
 
-int bb_init_rings(struct gemac_private *gemac)
+int bb_gemac_reset(struct gemac_private *gemac)
 {
-	struct ring *ring;
-	struct dma_desc *desc;
-	struct hw_desc *hw_desc;
 	int timeout_cnt = 50;
-	int i;
 
-	DBG("-->%s\n", __FUNCTION__);
-
-	/* Reset DMA */
 	writel(1, &gemac->dma.regs->cpdma_soft_reset);
 	while (readl(&gemac->dma.regs->cpdma_soft_reset) && --timeout_cnt)
 		msleep(1);
@@ -497,14 +510,24 @@ int bb_init_rings(struct gemac_private *gemac)
 	if (readl(&gemac->dma.regs->cpdma_soft_reset))
 		return -1;
 
+	return 0;
+}
+
+int bb_init_tx_rx_rings(struct gemac_private *gemac, int channel)
+{
+	struct ring *ring;
+	struct dma_desc *desc;
+	struct hw_desc *hw_desc;
+	int i;
+
+	DBG("-->%s\n", __FUNCTION__);
+
 	/* Zero ring head pointer */
-	for (i = 0; i < BB_DMA_CHANNELS_NUMBER; ++i) {
-		writel(0, &gemac->dma.stream->rx_hdp[i]);
-		writel(0, &gemac->dma.stream->tx_hdp[i]);
-	}
+	writel(0, &gemac->dma.stream->rx_hdp[channel]);
+	writel(0, &gemac->dma.stream->tx_hdp[channel]);
 
 	/* Now only for Rx ring */
-	ring = &gemac->rx_ring;
+	ring = &gemac->rx_ring[channel];
 	desc = ring->desc_ring;
 
 	for (i = 0; i < gemac->ring_size; ++i) {
@@ -522,7 +545,7 @@ int bb_init_rings(struct gemac_private *gemac)
 	ring->cur = ring->dirty = 0;
 
 	/* Enable Rx queue */
-	writel(desc[0].desc_dma, &gemac->dma.stream->rx_hdp[0]);
+	writel(desc[0].desc_dma, &gemac->dma.stream->rx_hdp[channel]);
 
 	DBG("<--%s\n", __FUNCTION__);
 

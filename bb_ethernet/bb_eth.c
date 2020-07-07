@@ -1,5 +1,6 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/bitops.h>
 #include "bb_eth.h"
 #include "bb_drv.h"
 #include "bb_mdio.h"
@@ -78,7 +79,7 @@ static int bb_gemac_open(struct net_device *ndev)
 {
 	struct gemac_private *gemac = netdev_priv(ndev);
 	int ret;
-
+	int i;
 
 	DBG("-->%s\n", __FUNCTION__);
 
@@ -87,7 +88,7 @@ static int bb_gemac_open(struct net_device *ndev)
 			       gemac);
 	if (ret < 0) {
 		dev_err(&gemac->pdev->dev, "can't attach rx irq (%d)\n", ret);
-		goto err_request_rx_int;
+		goto err_open;
 	}
 
 	ret = devm_request_irq(&gemac->pdev->dev, gemac->dt_irq_tx,
@@ -95,27 +96,41 @@ static int bb_gemac_open(struct net_device *ndev)
 			       gemac);
 	if (ret < 0) {
 		dev_err(&gemac->pdev->dev, "can't attach tx irq (%d)\n", ret);
-		goto err_request_tx_int;
+		goto err_open;
 	}
 
-	napi_enable(&gemac->rx_ring.napi);
-	napi_enable(&gemac->tx_ring.napi);
+	ret = bb_gemac_reset(gemac);
+	if (ret < 0)
+		goto err_open;
 
-	netif_start_queue(ndev);
+	for (i = 0; i < BB_DMA_CHANNELS_NUMBER; ++i) {
+		gemac->rx_ring[i].gemac = gemac;
+		gemac->tx_ring[i].gemac = gemac;
 
-	bb_alloc_ring(gemac, &gemac->rx_ring, 1);
-	bb_alloc_ring(gemac, &gemac->tx_ring, 0);
-	bb_init_rings(gemac);
+		netif_napi_add(ndev, &gemac->rx_ring[i].napi, poll_rx,
+			       NAPI_POLL_WEIGHT);
+		netif_tx_napi_add(ndev, &gemac->tx_ring[i].napi, poll_tx,
+				  NAPI_POLL_WEIGHT);
+
+		napi_enable(&gemac->rx_ring[i].napi);
+		napi_enable(&gemac->tx_ring[i].napi);
+
+		bb_alloc_ring(gemac, &gemac->rx_ring[i], true);
+		bb_alloc_ring(gemac, &gemac->tx_ring[i], false);
+		bb_init_tx_rx_rings(gemac, i);
+	}
+
+	bb_enable_interrupts(gemac, BB_DMA_CHANNELS_NUMBER);
+
 	bb_start_dma_engine(gemac);
 
-	bb_enable_interrupts(gemac, CPDMA_INT_CHANNEL0);
+	netif_start_queue(ndev);
 
 	DBG("<--%s\n", __FUNCTION__);
 
 	return 0;
 
-err_request_rx_int:
-err_request_tx_int:
+err_open:
 	return -1;
 }
 
@@ -126,38 +141,24 @@ err_request_tx_int:
 static int bb_gemac_stop(struct net_device *ndev)
 {
 	struct gemac_private *gemac = netdev_priv(ndev);
-	struct ring *rx_ring = &gemac->rx_ring;
-	struct ring *tx_ring = &gemac->tx_ring;
 	int i;
 
 	DBG("-->%s\n", __FUNCTION__);
 
-	bb_disable_interrupts(gemac, CPDMA_INT_CHANNEL0);
-
-	napi_disable(&gemac->rx_ring.napi);
-	napi_disable(&gemac->tx_ring.napi);
-
 	bb_stop_dma_engine(gemac);
 	netif_carrier_off(ndev);
 
-	for (i = 0; i < gemac->ring_size; ++i) {
-		/* Release Rx ring resources */
-		dma_unmap_single(&gemac->pdev->dev,
-				 rx_ring->desc_ring[i].buf_dma,
-				 rx_ring->desc_ring[i].buf_size,
-				 DMA_TO_DEVICE);
+	bb_disable_interrupts(gemac, BB_DMA_CHANNELS_NUMBER);
 
-		kfree(rx_ring->desc_ring[i].buf_cpu);
+	for (i = 0; i < BB_DMA_CHANNELS_NUMBER; ++i) {
+		napi_disable(&gemac->rx_ring[i].napi);
+		napi_disable(&gemac->tx_ring[i].napi);
 
-		dma_free_coherent(&gemac->pdev->dev, sizeof(struct hw_desc),
-				  rx_ring->desc_ring[i].desc_cpu,
-				  rx_ring->desc_ring[i].desc_dma);
+		netif_napi_del(&gemac->rx_ring[i].napi);
+		netif_napi_del(&gemac->tx_ring[i].napi);
 
-		/* Release Tx ring resources */
-		dma_free_coherent(&gemac->pdev->dev, sizeof(struct hw_desc),
-				  tx_ring->desc_ring[i].desc_cpu,
-				  tx_ring->desc_ring[i].desc_dma);
-
+		bb_free_ring(gemac, &gemac->rx_ring[i], true);
+		bb_free_ring(gemac, &gemac->tx_ring[i], false);
 	}
 
 	DBG("<--%s\n", __FUNCTION__);
@@ -363,27 +364,30 @@ static void bb_setup_driver_settings(struct gemac_private *gemac)
 static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 {
 	int result;
-	struct net_device *gemac;
+	struct net_device *ndev;
 	struct gemac_private *pdata;
 
 	DBG("-->%s\n", __FUNCTION__);
 
-	gemac = alloc_etherdev(sizeof(struct gemac_private));
-	if (!gemac)
+        ndev = devm_alloc_etherdev_mqs(&bb_gemac_dev->dev,
+        			       sizeof(struct gemac_private),
+        		 	       BB_DMA_CHANNELS_NUMBER,
+        		 	       BB_DMA_CHANNELS_NUMBER);
+	if (!ndev)
 		return -ENOMEM;
 
 	/* Embed private data into platform device */
-	pdata = netdev_priv(gemac);
-	pdata->ndev = gemac;
+	pdata = netdev_priv(ndev);
+	pdata->ndev = ndev;
 	pdata->pdev = bb_gemac_dev;
 	platform_set_drvdata(bb_gemac_dev, pdata);
-	SET_NETDEV_DEV(gemac, &bb_gemac_dev->dev);
+	SET_NETDEV_DEV(ndev, &bb_gemac_dev->dev);
 
 	/* Setup settings */
 	bb_setup_driver_settings(pdata);
 
 	/* Setup required net device fields */
-	gemac->netdev_ops = &gemac_net_ops;
+	ndev->netdev_ops = &gemac_net_ops;
 
 	result = bb_gemac_get_resources(pdata);
 	if (result)
@@ -419,25 +423,19 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	if (result)
 		goto err_mdio;
 
-	pdata->phy = phy_connect(gemac, BB_PHY_NAME, gemac_link_handler,
+	pdata->phy = phy_connect(ndev, BB_PHY_NAME, gemac_link_handler,
 			    	 pdata->dt_phy_interface);
 
 	/* Initialize subsystems */
 	bb_mac_init(pdata);
 	bb_ale_init(pdata);
 
-	/* Setup NAPI */
-	netif_napi_add(pdata->ndev, &pdata->rx_ring.napi, poll_rx,
-		       NAPI_POLL_WEIGHT);
-	netif_tx_napi_add(pdata->ndev, &pdata->tx_ring.napi, poll_tx,
-			  NAPI_POLL_WEIGHT);
-
 	/* Complete registration */
-	result = register_netdev(gemac);
+	result = register_netdev(ndev);
 	if (result)
 		goto err_complete_reg;
 
-	netif_carrier_off(gemac);
+	netif_carrier_off(ndev);
 
 	phy_attached_info(pdata->phy);
 	phy_start(pdata->phy);
@@ -446,8 +444,6 @@ static int bb_gemac_probe(struct platform_device *bb_gemac_dev)
 	return 0;
 
 err_complete_reg:
-	netif_napi_del(&pdata->rx_ring.napi);
-	netif_napi_del(&pdata->tx_ring.napi);
 	bb_mdio_destroy(&pdata->mdio);
 err_mdio:
 	clk_disable_unprepare(pdata->dt_clk);
@@ -468,18 +464,17 @@ err_get_resources:
  */
 static int bb_gemac_remove(struct platform_device *bb_gemac_dev)
 {
-	struct net_device *gemac;
+	struct net_device *ndev;
 	struct gemac_private *pdata;
 
 	DBG("-->%s\n", __FUNCTION__);
 
 	pdata = platform_get_drvdata(bb_gemac_dev);
-	gemac = pdata->ndev;
+	ndev = pdata->ndev;
 
 	bb_mdio_destroy(&pdata->mdio);
 
-	unregister_netdev(gemac);
-	free_netdev(gemac);
+	unregister_netdev(ndev);
 
 	DBG("<--%s\n", __FUNCTION__);
 	return 0;

@@ -51,9 +51,9 @@
 #define BB_MAC_LO_OFFSET		0x20
 #define BB_MAC_HI_OFFSET		0x24
 
-#define BB_GET_MAC_HI(mac)	(((mac)[0] << 0) | ((mac)[1] << 8) |	\
-			 	 ((mac)[2] << 16) | ((mac)[3] << 24))
-#define BB_GET_MAC_LO(mac)	(((mac)[4] << 0) | ((mac)[5] << 8))
+#define BB_GET_MAC_HI(mac)		(((mac)[0] << 0) | ((mac)[1] << 8) | \
+			 	 	 ((mac)[2] << 16) | ((mac)[3] << 24))
+#define BB_GET_MAC_LO(mac)		(((mac)[4] << 0) | ((mac)[5] << 8))
 
 //TODO: add BB prefix
 #define RX_PRIORITY_MAPPING		0x76543210
@@ -270,6 +270,7 @@ struct dma_desc
 
 struct ring
 {
+	struct gemac_private *gemac;
 	struct napi_struct napi;
 	struct dma_desc *desc_ring;
 	u32 cur;
@@ -311,8 +312,8 @@ struct gemac_private
 	phy_interface_t dt_phy_interface;
 
 	/* Software device resources */
-	struct ring tx_ring;
-	struct ring rx_ring;
+	struct ring tx_ring[BB_DMA_CHANNELS_NUMBER];
+	struct ring rx_ring[BB_DMA_CHANNELS_NUMBER];
 
 	/* Driver settings */
 	size_t ring_size;
