@@ -208,8 +208,10 @@ static int refill_rx(struct gemac_private *gemac, struct ring *rx_ring)
 		hw_desc->opt = CPDMA_DESC_OWNER;
 		if (opt & CPDMA_DESC_EOQ) {
 			hw_desc->next = 0;
+			//TODO: fix rx_hdp[0] to queue number
 			if (readl(&gemac->dma.stream->rx_hdp[0]) != 0)
 				pr_err("ERR: ETH: DMA: rx_hdp != 0\n");
+			//TODO: fix rx_hdp[0] to queue number
 			writel(rx->desc_ring->desc_dma, &gemac->dma.stream->rx_hdp[0]);
 			break;
 		} else {
@@ -246,6 +248,7 @@ static int refill_tx(struct gemac_private *gemac, struct ring *tx_ring)
 
 		dev_kfree_skb_any(sw_desc->skb);
 
+		//TODO: fix rx_hdp[0] to queue number
 		writel(sw_desc->desc_dma, &gemac->dma.stream->tx_cp[0]);
 
 		tx->dirty = NEXT_DESC(tx->dirty);
