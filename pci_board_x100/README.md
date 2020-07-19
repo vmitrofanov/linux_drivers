@@ -1,7 +1,7 @@
 # Structure
-/driver_kernel - Linux kernel driver. This is a UIO driver with access to PCI mapped resources.
-/include - headers
-/src - Wrapper to get access to UIO object. Examples/Tests 
+- /driver_kernel - Linux kernel driver. This is a UIO driver with access to PCI mapped resources.
+- /include - headers
+- /src - Wrapper to get access to UIO object. Examples/Tests 
 
 # Quick start
 1. Call make from /driver_kernel directory
