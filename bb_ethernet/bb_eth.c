@@ -115,6 +115,9 @@ static int bb_gemac_open(struct net_device *ndev)
 		napi_enable(&gemac->rx_ring[i].napi);
 		napi_enable(&gemac->tx_ring[i].napi);
 
+		gemac->rx_ring[i].idx = i;
+		gemac->tx_ring[i].idx = i;
+
 		bb_alloc_ring(gemac, &gemac->rx_ring[i], true);
 		bb_alloc_ring(gemac, &gemac->tx_ring[i], false);
 		bb_init_tx_rx_rings(gemac, i);

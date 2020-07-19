@@ -275,6 +275,7 @@ struct ring
 	struct dma_desc *desc_ring;
 	u32 cur;
 	u32 dirty;
+	u8 idx;
 };
 
 /**

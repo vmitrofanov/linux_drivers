@@ -191,6 +191,7 @@ static int refill_rx(struct gemac_private *gemac, struct ring *rx_ring)
 	int dirty_num = get_dirty_num(gemac, rx);
 	int refilled = 0;
 	u32 opt = 0;
+	u8 idx = rx_ring->idx;
 
 	while (dirty_num--) {
 		++refilled;
@@ -208,11 +209,9 @@ static int refill_rx(struct gemac_private *gemac, struct ring *rx_ring)
 		hw_desc->opt = CPDMA_DESC_OWNER;
 		if (opt & CPDMA_DESC_EOQ) {
 			hw_desc->next = 0;
-			//TODO: fix rx_hdp[0] to queue number
-			if (readl(&gemac->dma.stream->rx_hdp[0]) != 0)
+			if (readl(&gemac->dma.stream->rx_hdp[idx]) != 0)
 				pr_err("ERR: ETH: DMA: rx_hdp != 0\n");
-			//TODO: fix rx_hdp[0] to queue number
-			writel(rx->desc_ring->desc_dma, &gemac->dma.stream->rx_hdp[0]);
+			writel(rx->desc_ring->desc_dma, &gemac->dma.stream->rx_hdp[idx]);
 			break;
 		} else {
 			rx->dirty = NEXT_DESC(rx->dirty);
@@ -236,6 +235,7 @@ static int refill_tx(struct gemac_private *gemac, struct ring *tx_ring)
 	struct hw_desc *hw_desc;
 	int dirty_num = get_dirty_num(gemac, tx);
 	int refilled = 0;
+	u8 idx = tx_ring->idx;
 
 	DBG("-->%s\n", __FUNCTION__);
 
@@ -248,8 +248,7 @@ static int refill_tx(struct gemac_private *gemac, struct ring *tx_ring)
 
 		dev_kfree_skb_any(sw_desc->skb);
 
-		//TODO: fix rx_hdp[0] to queue number
-		writel(sw_desc->desc_dma, &gemac->dma.stream->tx_cp[0]);
+		writel(sw_desc->desc_dma, &gemac->dma.stream->tx_cp[idx]);
 
 		tx->dirty = NEXT_DESC(tx->dirty);
 		++refilled;
