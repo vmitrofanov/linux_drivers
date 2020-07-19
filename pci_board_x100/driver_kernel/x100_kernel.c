@@ -47,14 +47,14 @@ static int irq_enable_disable_handler(struct uio_info *dev_info, s32 irq_on)
 {
 	unsigned int *maskr = PCI_CTRL(PCI_CTRL_MASKR_PCI);
     
-	if( irq_on == 0 )
+	if (irq_on == 0)
 		/* Disable all IRQs */
 	*maskr = 0x0;
 	else
 		/* Enable all IRQs */
 		*maskr = int_all;
 
-    return 0;
+	return 0;
 }
 
 static irqreturn_t irq_handler(int irq, struct uio_info *dev_info) 
@@ -62,7 +62,7 @@ static irqreturn_t irq_handler(int irq, struct uio_info *dev_info)
 	volatile unsigned int *irq_status = PCI_CTRL(PCI_CTRL_QSTR_PCI);
 	volatile unsigned int *mbr_cpu = PCI_CTRL(PCI_CTRL_MBR_CPU);
 
-	if ((*irq_status) == 0)
+	if (*irq_status == 0)
 		return IRQ_NONE;
 
 	/* Read MBR_CPU to clear interrupt */
